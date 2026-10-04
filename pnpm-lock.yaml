@@ -80,6 +80,9 @@ importers:
       argon2:
         specifier: ^0.44.0
         version: 0.44.0
+      bullmq:
+        specifier: ^5.0.0
+        version: 5.81.5(supports-color@8.1.1)
       helmet:
         specifier: ^8.0.0
         version: 8.3.0
@@ -145,6 +148,15 @@ importers:
       '@uni/config':
         specifier: workspace:*
         version: link:../../packages/config
+      '@uni/database':
+        specifier: workspace:*
+        version: link:../../packages/database
+      '@uni/mail':
+        specifier: workspace:*
+        version: link:../../packages/mail
+      '@uni/security':
+        specifier: workspace:*
+        version: link:../../packages/security
       '@uni/shared':
         specifier: workspace:*
         version: link:../../packages/shared

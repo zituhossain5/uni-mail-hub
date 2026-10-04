@@ -1,60 +1,30 @@
 # Architecture
 
-## Current local architecture
-
 ```text
-Browser → Next.js App Router / same-origin API relay → NestJS API
-                                           │                 │
-                                           │                 ├─ PostgreSQL via Prisma
-                                           │                 └─ Redis for health checks
-                                           └─ HTTP-only session cookie
-
-BullMQ worker → Redis (idle processors for future mail queues)
-Mailpit (local SMTP verification target; no message is sent)
+Browser -> Next.js UI and cookie relay -> NestJS admin API -> PostgreSQL
+Client application -> project API key -> NestJS sending API -> PostgreSQL message + outbox
+                                                        -> BullMQ / Redis -> SMTP worker
+                                                                         -> credential vault
+                                                                         -> configured SMTP server
+Mailpit -> local SMTP capture for tests
 ```
 
-`apps/web` owns the UI and cookie boundary. `apps/api` owns authentication, authorization, registry CRUD, manual connection checks, and audit writes. `apps/worker` owns queue consumers. `packages/shared` holds validation and statuses; `packages/config` validates runtime configuration; `packages/database` holds Prisma schema and seed; `packages/security` holds AES-256-GCM encryption; `packages/mail` holds short-lived IMAP and SMTP verification clients.
+`apps/web` owns the admin UI and HTTP-only session cookie. `apps/api` owns human authentication, project/mailbox/API-key authorization, registry writes, sending request validation, and audits. `apps/worker` owns SMTP queue consumers and outbox reconciliation. `packages/database` defines business state; `packages/shared` validates requests; `packages/config` validates environment settings; `packages/security` hashes API keys and encrypts credentials; `packages/mail` creates short-lived SMTP transports and classifies send failures.
 
-The API exposes versioned `/api/v1` routes for authentication, the dashboard, registry records, credentials, connection checks, and history. Future sending and webhooks can use the same browser authentication boundary.
+## Sending flow
 
-## Mail credential trust boundary
+The admin creates a project-scoped API key and explicitly grants sender mailboxes from that project. Only a SHA-256 hash and a safe prefix are stored. Client applications send a bearer key, an `Idempotency-Key`, and message content to `POST /api/v1/messages`. The API checks key status/scope, a Redis per-key rate limit, mailbox grant, and message limits. A PostgreSQL write creates the outgoing message, structured recipients, and outbox event together. The API publishes a BullMQ job containing only `{messageId}` and returns the message ID.
 
-```text
-Mailbox → Mailbox Credential Vault → AES-256-GCM → Connectivity Service
-                                                  ├── ImapFlow connect/logout
-                                                  └── Nodemailer verify/close
-```
+PostgreSQL is the authority for key grants, idempotency, messages, recipient state, SMTP attempts, and outbox events. Redis/BullMQ distributes work; queue retention does not define message history. If direct queue publication fails after the database write, the durable outbox remains ready and the API returns 503. The worker republishes due events every five seconds and recovers stale processing records after two minutes.
 
-MailServer stores reusable endpoints and transport modes. MailboxCredential stores username and versioned encrypted password material. The master key exists only in the API environment, never in PostgreSQL. The API decrypts only for a manual test. MailboxConnectionCheck stores per-protocol sanitized outcomes and latency. Changing credentials or server configuration increments a version so old checks no longer define current health. The server UI summarizes assigned mailbox results; it does not claim server health from configuration alone. The connection service is independent of controllers for future worker reuse; no scheduled tests run in this module.
+The worker claims a queued message atomically, reads its configured mailbox and server, decrypts a password only if SMTP authentication needs it, opens an SMTP connection, and sends via Nodemailer. Each attempt stores timestamps, sanitized response/error codes, and recipient results. Transient failures schedule exponential backoff through the outbox. Permanent/authentication failures become `FAILED`. Partially accepted recipients are not resent automatically. The admin can manually retry a final failure. An accepted message ignores duplicate queue jobs.
 
-## Intended mail flow
+The sender display name/address come from the mailbox. The request cannot provide SMTP secrets or arbitrary headers. `SMTP_ACCEPTED` records upstream SMTP acceptance, not final inbox delivery. If SMTP accepts a message and a worker crashes before its database write, recovery may submit it again. The system provides idempotent API submission and durable processing, but cannot promise exactly-once SMTP delivery. The UI's **Outgoing Mail** view contains API-submitted messages; it is not an IMAP Sent folder.
 
-```text
-Applications
-    ↓ project-scoped API keys
-Uni Mail Hub API
-    ↓ authentication and authorization
-Redis / BullMQ
-    ↓
-SMTP worker
-    ↓
-Mail provider (initially existing cPanel mail infrastructure)
+## Mail credential boundary
 
-Mail provider
-    ↓ IMAP
-Sync worker
-    ↓
-PostgreSQL
-    ↓
-Uni Mail Hub web UI
-```
+`MailServer` stores reusable endpoints and transport modes. `MailboxCredential` stores username and versioned AES-256-GCM encrypted password material. The Base64 master key exists only in the API/worker environment, never in PostgreSQL. The API decrypts for manual connection tests; the worker decrypts only when sending through password-authenticated SMTP. Credentials never enter BullMQ jobs or client responses. Mailbox connection checks are manual and record sanitized per-protocol outcomes. Changing credentials or server configuration increments a version so old checks no longer define current health.
 
-Future mail credentials should be centrally encrypted with a dedicated managed key and rotated without exposing plaintext to websites. Websites should use project-scoped API keys, stored only as hashes, rather than SMTP passwords. Sending, receiving, DNS checks, and provider integration require separate implementation and security review.
+## Existing and future features
 
-## Security boundaries
-
-- The web relay accepts browser requests from its own origin and keeps the JWT in an HTTP-only cookie. Direct API routes require Bearer authentication.
-- The API looks up the user on each request and checks `isActive`; registry controllers require `SUPER_ADMIN`.
-- Prisma relational constraints prevent orphaned domains and mailboxes; the API validates mailbox address, domain, and project consistency.
-- Registry changes write audit events. Request logs contain method, path, status, duration, and request ID but no body or authorization header.
-- Encrypted credentials are stored separately from mailboxes. No plaintext mail passwords, API key plaintext, or synchronized messages are stored.
+Human admin routes use JWT through the web relay. The API checks users in the database and requires `SUPER_ADMIN` for registry and send-management actions. The application sending route uses a separate API-key guard. Module 1 registry and Module 2 connectivity tests remain available. IMAP synchronization, bounce handling, delivery tracking, bulk campaigns, and provider API integration are outside this module.

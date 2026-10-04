@@ -5,6 +5,9 @@ export type Protocol = 'IMAP' | 'SMTP';
 export type Security = 'NONE' | 'STARTTLS' | 'TLS';
 export type ConnectionResult = { status: 'SUCCESS' | 'FAILED'; latencyMs: number; errorCode: string | null; message: string };
 export type Endpoint = { host: string; port: number; security: Security };
+export function createSmtpTransport(endpoint: Endpoint, auth: { user: string; pass: string } | null) {
+  return nodemailer.createTransport({ host: endpoint.host, port: endpoint.port, secure: endpoint.security === 'TLS', requireTLS: endpoint.security === 'STARTTLS', ignoreTLS: endpoint.security === 'NONE', auth: auth ?? undefined, connectionTimeout: 10000, greetingTimeout: 10000, socketTimeout: 15000 });
+}
 
 export function classifyConnectionError(protocol: Protocol, error: unknown): { errorCode: string; message: string } {
   const e = error as { code?: string; responseCode?: number; message?: string };
@@ -36,9 +39,30 @@ export async function testImap(endpoint: Endpoint, username: string, password: s
 
 export async function testSmtp(endpoint: Endpoint, auth: { user: string; pass: string } | null): Promise<ConnectionResult> {
   const result = await measure('SMTP', async () => {
-    const transport = nodemailer.createTransport({ host: endpoint.host, port: endpoint.port, secure: endpoint.security === 'TLS', requireTLS: endpoint.security === 'STARTTLS', ignoreTLS: endpoint.security === 'NONE', auth: auth ?? undefined, connectionTimeout: 6000, greetingTimeout: 6000, socketTimeout: 6000 });
+    const transport = createSmtpTransport(endpoint, auth);
     try { await transport.verify(); } finally { transport.close(); }
   });
   if (result.status === 'SUCCESS' && !auth) result.message = 'Connected successfully; authentication is disabled for this server.';
   return result;
+}
+
+export type SendRecipient = { email: string; name?: string | null };
+export function classifySendError(error: unknown): { code: string; message: string; retryable: boolean; smtpResponseCode: number | null } {
+  const e = error as { code?: string; responseCode?: number; message?: string };
+  const responseCode = Number.isInteger(e?.responseCode) ? e.responseCode! : null;
+  if (e?.code === 'EENVELOPE' && responseCode && responseCode >= 500) return { code: 'SMTP_RECIPIENT_REJECTED', message: `SMTP rejected the recipient (${responseCode}).`, retryable: false, smtpResponseCode: responseCode };
+  if (responseCode && responseCode >= 400 && responseCode < 500) return { code: 'SMTP_TEMPORARY_FAILURE', message: `SMTP temporary failure (${responseCode}).`, retryable: true, smtpResponseCode: responseCode };
+  if (responseCode && responseCode >= 500 && responseCode < 600) return { code: responseCode === 535 ? 'SMTP_AUTH_FAILED' : 'SMTP_PERMANENT_FAILURE', message: responseCode === 535 ? 'SMTP authentication failed.' : `SMTP permanent failure (${responseCode}).`, retryable: false, smtpResponseCode: responseCode };
+  const mapped = classifyConnectionError('SMTP', error);
+  const retryable = ['SMTP_TIMEOUT', 'SMTP_DNS_FAILED', 'SMTP_CONNECTION_REFUSED', 'SMTP_CONNECTION_FAILED'].includes(mapped.errorCode);
+  return { code: mapped.errorCode, message: mapped.message, retryable, smtpResponseCode: responseCode };
+}
+
+export async function sendSmtp(input: { endpoint: Endpoint; auth: { user: string; pass: string } | null; from: SendRecipient; to: SendRecipient[]; cc: SendRecipient[]; bcc: SendRecipient[]; replyTo?: SendRecipient | null; subject: string; text?: string | null; html?: string | null }) {
+  const transport = createSmtpTransport(input.endpoint, input.auth);
+  const format = (recipient: SendRecipient) => ({ address: recipient.email, name: recipient.name ?? '' });
+  try {
+    const result = await transport.sendMail({ from: format(input.from), to: input.to.map(format), cc: input.cc.map(format), bcc: input.bcc.map(format), replyTo: input.replyTo ? format(input.replyTo) : undefined, subject: input.subject, text: input.text ?? undefined, html: input.html ?? undefined });
+    return { accepted: result.accepted.map(String).map(value => value.toLowerCase()), rejected: result.rejected.map(String).map(value => value.toLowerCase()), pending: result.pending?.map(String).map(value => value.toLowerCase()) ?? [], messageId: result.messageId, responseCode: Number(result.response?.match(/^([0-9]{3})/)?.[1]) || null };
+  } finally { transport.close(); }
 }

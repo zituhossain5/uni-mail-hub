@@ -78,6 +78,7 @@ model User {
   updatedAt    DateTime  @updatedAt
   lastLoginAt  DateTime?
   auditLogs    AuditLog[]
+  createdApiKeys ApiKey[] @relation("ApiKeyCreator")
 }
 
 model Project {
@@ -91,6 +92,7 @@ model Project {
   domains     Domain[]
   mailboxes   Mailbox[]
   apiKeys     ApiKey[]
+  outgoingMessages OutgoingMessage[]
 }
 
 model Domain {
@@ -144,6 +146,9 @@ model Mailbox {
   connectionConfigVersion Int @default(1)
   credential MailboxCredential?
   connectionChecks MailboxConnectionCheck[]
+  apiKeyGrants ApiKeyMailboxGrant[]
+  outgoingMessages OutgoingMessage[]
+  smtpAttempts SmtpAttempt[]
 
   @@index([projectId])
   @@index([domainId])
@@ -186,13 +191,150 @@ model ApiKey {
   name       String
   keyPrefix  String
   keyHash    String
+  scopes     String[] @default(["MAIL_SEND"])
   isActive   Boolean   @default(true)
   lastUsedAt DateTime?
   expiresAt  DateTime?
   createdAt  DateTime  @default(now())
   updatedAt  DateTime  @updatedAt
+  revokedAt DateTime?
+  createdByUserId String?
+  createdBy User? @relation("ApiKeyCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
+  grants ApiKeyMailboxGrant[]
+  outgoingMessages OutgoingMessage[]
 
   @@index([projectId])
+  @@unique([keyHash])
+}
+
+model ApiKeyMailboxGrant {
+  id String @id @default(cuid())
+  apiKeyId String
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Cascade)
+  mailboxId String
+  mailbox Mailbox @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  canSend Boolean @default(true)
+  createdAt DateTime @default(now())
+
+  @@unique([apiKeyId, mailboxId])
+  @@index([mailboxId])
+}
+
+enum OutgoingStatus {
+  QUEUED
+  PROCESSING
+  RETRY_SCHEDULED
+  SMTP_ACCEPTED
+  SMTP_ACCEPTED_WITH_REJECTIONS
+  FAILED
+  CANCELLED
+}
+
+enum RecipientType {
+  TO
+  CC
+  BCC
+}
+
+enum RecipientSmtpStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum SmtpAttemptStatus {
+  ACCEPTED
+  PARTIAL
+  FAILED
+}
+
+enum OutboxStatus {
+  READY
+  PUBLISHED
+}
+
+model OutgoingMessage {
+  id String @id @default(cuid())
+  projectId String
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  apiKeyId String
+  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Restrict)
+  fromMailboxId String
+  fromMailbox Mailbox @relation(fields: [fromMailboxId], references: [id], onDelete: Restrict)
+  subject String
+  textBody String?
+  htmlBody String?
+  replyToEmail String?
+  replyToName String?
+  status OutgoingStatus @default(QUEUED)
+  priority Int @default(0)
+  idempotencyKey String
+  requestHash String
+  attemptCount Int @default(0)
+  queuedAt DateTime @default(now())
+  processingAt DateTime?
+  smtpAcceptedAt DateTime?
+  failedAt DateTime?
+  lastErrorCode String?
+  lastErrorMessage String?
+  rfcMessageId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  recipients OutgoingRecipient[]
+  attempts SmtpAttempt[]
+  outboxEvents OutboxEvent[]
+
+  @@unique([apiKeyId, idempotencyKey])
+  @@index([projectId, createdAt])
+  @@index([status, createdAt])
+}
+
+model OutgoingRecipient {
+  id String @id @default(cuid())
+  messageId String
+  message OutgoingMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  type RecipientType
+  email String
+  name String?
+  smtpStatus RecipientSmtpStatus @default(PENDING)
+  smtpResponse String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([messageId, type])
+}
+
+model SmtpAttempt {
+  id String @id @default(cuid())
+  messageId String
+  message OutgoingMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  mailboxId String
+  mailbox Mailbox @relation(fields: [mailboxId], references: [id], onDelete: Restrict)
+  attemptNumber Int
+  status SmtpAttemptStatus
+  startedAt DateTime
+  finishedAt DateTime @default(now())
+  latencyMs Int
+  smtpResponseCode Int?
+  smtpResponse String?
+  messageIdHeader String?
+  errorCode String?
+  errorMessage String?
+  createdAt DateTime @default(now())
+
+  @@unique([messageId, attemptNumber])
+}
+
+model OutboxEvent {
+  id String @id @default(cuid())
+  messageId String
+  message OutgoingMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  status OutboxStatus @default(READY)
+  availableAt DateTime @default(now())
+  publishedAt DateTime?
+  createdAt DateTime @default(now())
+
+  @@index([status, availableAt])
 }
 
 model AuditLog {

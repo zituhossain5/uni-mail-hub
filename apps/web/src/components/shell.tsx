@@ -6,7 +6,7 @@ import { Activity, Bell, ChevronDown, CircleHelp, CodeXml, FileText, FolderKanba
 import type { LucideIcon } from 'lucide-react';
 
 const primary: [string, string, LucideIcon][] = [['Dashboard','/dashboard',LayoutDashboard],['Inbox','/inbox',Inbox],['Sent','/sent',Send],['Drafts','/drafts',FileText]];
-const manage: [string, string, LucideIcon][] = [['Projects','/projects',FolderKanban],['Domains','/domains',Globe2],['Mailboxes','/mailboxes',Mail],['Mail Servers','/mail-servers',Settings2],['API Keys','/api-keys',CodeXml],['Templates','/templates',SlidersHorizontal]];
+const manage: [string, string, LucideIcon][] = [['Outgoing Mail','/outgoing-mail',Send],['Projects','/projects',FolderKanban],['Domains','/domains',Globe2],['Mailboxes','/mailboxes',Mail],['Mail Servers','/mail-servers',Settings2],['API Keys','/api-keys',CodeXml],['Templates','/templates',SlidersHorizontal]];
 const system: [string, string, LucideIcon][] = [['Monitoring','/monitoring',Activity],['Logs','/logs',ShieldCheck],['Settings','/settings',Settings2]];
 function NavGroup({ title, items, path, close }: { title: string; items: [string,string,LucideIcon][]; path: string; close: () => void }) { return <div className="nav-group"><div className="nav-caption">{title}</div>{items.map(([label, href, Icon]) => <Link key={href} href={href} onClick={close} className={`nav-link ${path === href || (href === '/projects' && path.startsWith('/projects/')) ? 'active' : ''}`}><Icon size={18} strokeWidth={1.8}/><span>{label}</span></Link>)}</div>; }
 export function Shell({ user, children }: { user: { name: string; email: string; role: string }; children: React.ReactNode }) {

@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, timingSafeEqual } from 'node:crypto';
 
 export type EncryptedSecret = { encryptedPassword: string; encryptionIv: string; encryptionAuthTag: string; encryptionVersion: number };
 
@@ -24,4 +24,15 @@ export function decryptSecret(payload: EncryptedSecret, key: Buffer): string {
     decipher.setAuthTag(Buffer.from(payload.encryptionAuthTag, 'base64'));
     return Buffer.concat([decipher.update(Buffer.from(payload.encryptedPassword, 'base64')), decipher.final()]).toString('utf8');
   } catch { throw new Error('CREDENTIAL_DECRYPTION_FAILED'); }
+}
+
+export function generateApiKey(environment: 'test' | 'live' = 'test') {
+  const rawKey = `umh_${environment}_${randomBytes(32).toString('base64url')}`;
+  return { rawKey, keyPrefix: rawKey.slice(0, 18), keyHash: hashApiKey(rawKey) };
+}
+
+export function hashApiKey(rawKey: string): string { return createHash('sha256').update(rawKey, 'utf8').digest('hex'); }
+export function apiKeysEqual(left: string, right: string): boolean {
+  const a = Buffer.from(left, 'hex'); const b = Buffer.from(right, 'hex');
+  return a.length === b.length && timingSafeEqual(a, b);
 }

@@ -140,14 +140,20 @@ export class MailboxesController {
 export class DashboardController {
   constructor(@Inject(Database) private readonly db: Database) {}
   @Get() async get() {
-    const [projects, domains, mailboxes, healthyMailboxes, warningMailboxes, errorMailboxes, unknownMailboxes, recentActivity] = await Promise.all([
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const [projects, domains, mailboxes, healthyMailboxes, warningMailboxes, errorMailboxes, unknownMailboxes, queuedMessages, processingMessages, retryScheduledMessages, smtpAcceptedToday, failedToday, recentActivity] = await Promise.all([
       this.db.project.count(), this.db.domain.count(), this.db.mailbox.count(),
       this.db.mailbox.count({ where: { status: 'HEALTHY', isActive: true } }),
       this.db.mailbox.count({ where: { status: 'WARNING', isActive: true } }),
       this.db.mailbox.count({ where: { status: 'ERROR', isActive: true } }),
       this.db.mailbox.count({ where: { status: 'UNKNOWN', isActive: true } }),
+      this.db.outgoingMessage.count({ where: { status: 'QUEUED' } }),
+      this.db.outgoingMessage.count({ where: { status: 'PROCESSING' } }),
+      this.db.outgoingMessage.count({ where: { status: 'RETRY_SCHEDULED' } }),
+      this.db.outgoingMessage.count({ where: { status: { in: ['SMTP_ACCEPTED', 'SMTP_ACCEPTED_WITH_REJECTIONS'] }, smtpAcceptedAt: { gte: today } } }),
+      this.db.outgoingMessage.count({ where: { status: 'FAILED', failedAt: { gte: today } } }),
       this.db.auditLog.findMany({ take: 8, orderBy: { createdAt: 'desc' }, select: { id: true, action: true, entityType: true, createdAt: true, user: { select: { name: true } } } }),
     ]);
-    return { projects, domains, mailboxes, healthyMailboxes, warningMailboxes, errorMailboxes, unknownMailboxes, issueMailboxes: warningMailboxes + errorMailboxes, recentActivity };
+    return { projects, domains, mailboxes, healthyMailboxes, warningMailboxes, errorMailboxes, unknownMailboxes, issueMailboxes: warningMailboxes + errorMailboxes, queuedMessages, processingMessages, retryScheduledMessages, smtpAcceptedToday, failedToday, recentActivity };
   }
 }
