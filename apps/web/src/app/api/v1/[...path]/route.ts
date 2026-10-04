@@ -41,4 +41,5 @@ async function relay(request: NextRequest, context: { params: Promise<{ path: st
 export const GET = relay;
 export const POST = relay;
 export const PATCH = relay;
+export const PUT = relay;
 export const DELETE = relay;

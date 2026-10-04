@@ -2,7 +2,7 @@ import Link from 'next/link';
 import { Activity, ArrowRight, CheckCircle2, CircleAlert, Clock3, FolderKanban, Globe2, Inbox, Mail, Send, Server, ShieldCheck } from 'lucide-react';
 import { apiGet } from '@/lib/api';
 
-type Summary = { projects: number; domains: number; mailboxes: number; healthyMailboxes: number; issueMailboxes: number; recentActivity: { id: string; action: string; entityType: string; createdAt: string; user: { name: string } | null }[] };
+type Summary = { projects: number; domains: number; mailboxes: number; healthyMailboxes: number; warningMailboxes: number; errorMailboxes: number; unknownMailboxes: number; issueMailboxes: number; recentActivity: { id: string; action: string; entityType: string; createdAt: string; user: { name: string } | null }[] };
 type Health = { status: string; database: string; redis: string };
 export default async function Dashboard() {
   const summary = await apiGet<Summary>('dashboard');
@@ -13,7 +13,9 @@ export default async function Dashboard() {
     { label: 'Domains', value: summary.domains, icon: Globe2, tone: 'indigo' },
     { label: 'Mailboxes', value: summary.mailboxes, icon: Mail, tone: 'cyan' },
     { label: 'Healthy mailboxes', value: summary.healthyMailboxes, icon: CheckCircle2, tone: 'green' },
-    { label: 'With issues', value: summary.issueMailboxes, icon: CircleAlert, tone: 'amber' },
+    { label: 'Warning mailboxes', value: summary.warningMailboxes, icon: CircleAlert, tone: 'amber' },
+    { label: 'Mailboxes with errors', value: summary.errorMailboxes, icon: CircleAlert, tone: 'amber' },
+    { label: 'Unknown mailboxes', value: summary.unknownMailboxes, icon: Clock3, tone: 'cyan' },
   ];
   return <><div className="page-heading"><div><div className="eyebrow">WORKSPACE OVERVIEW</div><h1>Dashboard</h1><p>Keep every project and mailbox in view.</p></div><Link href="/projects" className="primary-button">Manage projects <ArrowRight size={17}/></Link></div>
     <div className="dashboard-intro"><div className="intro-icon"><Activity size={22}/></div><div><strong>Your mail operations, at a glance</strong><p>Connect projects and register domains to start building your workspace.</p></div><Link href="/projects">Get started <ArrowRight size={15}/></Link></div>

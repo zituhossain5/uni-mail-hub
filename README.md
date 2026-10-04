@@ -14,7 +14,7 @@ Uni Mail Hub is a local development foundation for a centralized mail control pl
 ```powershell
 cd D:\projects\uni-mail-hub
 Copy-Item .env.example .env
-# Edit .env: set a unique JWT_SECRET and SEED_ADMIN_PASSWORD (at least 12 characters).
+# Edit .env: set JWT_SECRET, SEED_ADMIN_PASSWORD, and MAIL_CREDENTIAL_ENCRYPTION_KEY.
 pnpm install
 docker compose up -d
 pnpm db:migrate
@@ -40,6 +40,7 @@ All three applications run through pnpm on Windows. Docker Compose runs only Pos
 | Lint | `pnpm lint` |
 | Build all apps | `pnpm build` |
 | End-to-end local smoke test (requires running stack) | `pnpm test:smoke` |
+| Mail connectivity smoke test (requires Mailpit and running stack) | `pnpm test:module2` |
 | Stop local infrastructure | `docker compose down` |
 
 `pnpm db:migrate` may prompt if it detects schema drift. Review the prompt before accepting a reset. **Destructive reset:** `docker compose down -v` deletes the local PostgreSQL and Redis volumes and all their data. Only run that command if you intend to start over.
@@ -50,8 +51,16 @@ On Windows, stop `pnpm dev` before `pnpm build` or `pnpm db:generate`: the runni
 
 The web app uses a same-origin API relay. Login sends credentials to the NestJS API; the web relay stores the returned eight-hour JWT in an HTTP-only, SameSite=Lax cookie, then strips the token from the browser response. Server-rendered protected pages verify the user with `/auth/me`. The API verifies every protected request against the database so disabled users lose access. Registry writes require `SUPER_ADMIN`; a seeded super admin is the only full-access role in this phase. Login is rate limited. Local passwords use Argon2 hashes. The API does not log request bodies, passwords, or tokens.
 
-Project and domain deletions are blocked while they have dependent records. The mailbox registry stores addresses and metadata only; no mailbox credentials are collected. Status fields are registry values and do not claim live verification. The dashboard displays real database counts and shows unavailable message metrics as dashes.
+Project and domain deletions are blocked while they have dependent records. Mailbox connection health comes from manual tests. The dashboard displays real database counts and shows unavailable message metrics as dashes.
 
-For production deployment later, configure HTTPS, a unique strong JWT secret, managed database and Redis, network binding, and an operational secrets store. `ENCRYPTION_KEY` is a documented placeholder for future credential encryption and is not used yet. There is no production deployment configuration in this phase.
+For production deployment later, configure HTTPS, a unique strong JWT secret, managed database and Redis, network binding, and an operational secrets store. There is no production deployment configuration in this phase.
+
+## Module 2 — Mail Connectivity
+
+Set `MAIL_CREDENTIAL_ENCRYPTION_KEY` in local `.env` to a Base64-encoded 32-byte key. Generate one with `node -e "console.log(require('crypto').randomBytes(32).toString('base64'))"` in PowerShell. Keep the key outside Git and back it up securely; losing it makes stored mailbox passwords unrecoverable. Never regenerate it on every boot. The API refuses to start when it is missing or invalid.
+
+In the UI, open **Mail Servers**, add IMAP/SMTP endpoints with explicit TLS modes, then open **Mailboxes** and assign a server. Click a mailbox to configure or replace its credentials and manually run IMAP, SMTP, or combined checks. Connection history and health are based on actual results. **Uni Mail Hub does not retrieve stored mailbox passwords. Replacing a credential requires entering a new password.** Removing a credential leaves the mailbox intact.
+
+For local Mailpit SMTP testing, add a Generic server with SMTP host `127.0.0.1`, port `51025`, security `NONE`, authentication `NONE`; leave both IMAP fields empty. Assign it to a mailbox and click **Test SMTP**. Mailpit's browser UI is at `http://127.0.0.1:8025`. This checks SMTP connectivity only; it sends no message. Mailpit has no IMAP service, so a combined test should show a separate IMAP configuration failure. A real IMAP success requires a mailbox you configure manually. Production forbids unencrypted mail connections and validates TLS certificates. See [mail security](docs/mail-security.md).
 
 See [architecture](docs/architecture.md) and [roadmap](docs/roadmap.md).

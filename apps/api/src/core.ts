@@ -76,12 +76,12 @@ export class ApiExceptionFilter implements ExceptionFilter {
       else if (exception.code === 'P2003') { status = 409; code = 'RELATION_CONFLICT'; message = 'Related records prevent this change'; }
       else if (exception.code === 'P2025') { status = 404; code = 'NOT_FOUND'; message = 'Record not found'; }
     }
-    if (status === 500) requestLogger.error({ errorType: exception instanceof Error ? exception.name : typeof exception, ...(exception instanceof TypeError ? { errorMessage: exception.message } : {}) }, 'unhandled request error');
+    if (status === 500) requestLogger.error({ errorType: exception instanceof Error ? exception.name : typeof exception }, 'unhandled request error');
     response.status(status).json({ statusCode: status, code, message, ...(details ? { details } : {}) });
   }
 }
 
-const logger = pino({ redact: ['req.headers.authorization', 'password', 'token', 'keyHash'], level: process.env.NODE_ENV === 'production' ? 'info' : 'debug' });
+const logger = pino({ redact: ['req.headers.authorization', 'req.headers.cookie', 'password', 'encryptedPassword', 'secret', 'apiKey', 'token', 'keyHash', 'MAIL_CREDENTIAL_ENCRYPTION_KEY'], level: process.env.NODE_ENV === 'production' ? 'info' : 'debug' });
 export class JsonLogger implements LoggerService {
   log(message: unknown, context?: string) { logger.info({ context }, String(message)); }
   error(message: unknown, trace?: string, context?: string) { logger.error({ context, ...(process.env.NODE_ENV === 'production' ? {} : { trace }) }, String(message)); }

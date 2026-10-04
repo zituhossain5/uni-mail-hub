@@ -8,6 +8,7 @@ const schema = z.object({
   WEB_URL: z.string().url(),
   API_URL: z.string().url(),
   API_PORT: z.coerce.number().int().positive().default(4000),
+  MAIL_CREDENTIAL_ENCRYPTION_KEY: z.string().refine((value) => /^[A-Za-z0-9+/]{43}=$/.test(value) && Buffer.from(value, 'base64').length === 32, 'Must be a Base64-encoded 32-byte key'),
 });
 
 export function readConfig() {

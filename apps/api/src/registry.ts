@@ -12,7 +12,7 @@ function ensureUnverifiedDomainStatus(status?: string) {
   if (status && status !== 'UNVERIFIED' && status !== 'DISABLED') throw new HttpException({ code: 'STATUS_NOT_VERIFIED', message: 'DNS verification is not available yet' }, 400);
 }
 function ensureUnverifiedMailboxStatus(status?: string) {
-  if (status && status !== 'UNKNOWN' && status !== 'DISABLED') throw new HttpException({ code: 'STATUS_NOT_CHECKED', message: 'Mailbox health checks are not available yet' }, 400);
+  if (status && status !== 'UNKNOWN' && status !== 'DISABLED') throw new HttpException({ code: 'STATUS_NOT_CHECKED', message: 'Mailbox health is determined by connection checks' }, 400);
 }
 
 async function audit(db: Database, request: AuthedRequest, action: string, entityType: string, entityId: string) {
@@ -91,23 +91,26 @@ export class DomainsController {
 @Controller('mailboxes')
 export class MailboxesController {
   constructor(@Inject(Database) private readonly db: Database) {}
-  @Get() list() { return this.db.mailbox.findMany({ orderBy: { createdAt: 'desc' }, include: { project: { select: { id: true, name: true } }, domain: { select: { id: true, domain: true } } } }); }
+  @Get() list() { return this.db.mailbox.findMany({ orderBy: { createdAt: 'desc' }, include: { project: { select: { id: true, name: true } }, domain: { select: { id: true, domain: true } }, mailServer: { select: { id: true, name: true, status: true } }, credential: { select: { username: true, updatedAt: true } }, connectionChecks: { orderBy: { testedAt: 'desc' }, take: 10, select: { protocol: true, status: true, testedAt: true, configVersion: true } } } }); }
   @Get(':id') async get(@Param('id') rawId: string) {
-    const item = await this.db.mailbox.findUnique({ where: { id: parse(idSchema, rawId) }, include: { project: true, domain: true, mailServer: true } });
+    const item = await this.db.mailbox.findUnique({ where: { id: parse(idSchema, rawId) }, include: { project: true, domain: true, mailServer: true, credential: { select: { username: true, updatedAt: true, lastRotatedAt: true } }, connectionChecks: { orderBy: { testedAt: 'desc' }, take: 20 } } });
     if (!item) throw new HttpException('Mailbox not found', 404);
     return item;
   }
-  private async checkRelations(input: { projectId: string; domainId: string; email: string; mailServerId?: string | null }) {
+  private async checkRelations(input: { projectId: string; domainId: string; email: string; mailServerId?: string | null }, requireActiveServer = true) {
     const domain = await this.db.domain.findUnique({ where: { id: input.domainId } });
     if (!domain || domain.projectId !== input.projectId) throw new HttpException({ code: 'INVALID_RELATION', message: 'Domain must belong to the selected project' }, 400);
     if (!input.email.endsWith(`@${domain.domain}`)) throw new HttpException({ code: 'INVALID_RELATION', message: 'Mailbox email must use the selected domain' }, 400);
-    if (input.mailServerId && !(await this.db.mailServer.findUnique({ where: { id: input.mailServerId } }))) throw new HttpException({ code: 'INVALID_RELATION', message: 'Mail server not found' }, 400);
+    if (input.mailServerId) {
+      const server = await this.db.mailServer.findUnique({ where: { id: input.mailServerId } });
+      if (!server || requireActiveServer && server.status !== 'ACTIVE') throw new HttpException({ code: 'INVALID_RELATION', message: 'Select an active mail server' }, 400);
+    }
   }
   @Post() async create(@Body() body: unknown, @Req() request: AuthedRequest) {
     const input = parse(mailboxSchema, body);
     ensureUnverifiedMailboxStatus(input.status);
     await this.checkRelations(input);
-    const item = await this.db.mailbox.create({ data: input });
+    const item = await this.db.mailbox.create({ data: { ...input, ...(input.isActive === false || input.status === 'DISABLED' ? { status: 'DISABLED' } : {}) } });
     await audit(this.db, request, 'mailbox.created', 'Mailbox', item.id);
     return item;
   }
@@ -117,8 +120,11 @@ export class MailboxesController {
     ensureUnverifiedMailboxStatus(input.status);
     const existing = await this.db.mailbox.findUnique({ where: { id } });
     if (!existing) throw new HttpException('Mailbox not found', 404);
-    await this.checkRelations({ projectId: input.projectId ?? existing.projectId, domainId: input.domainId ?? existing.domainId, email: input.email ?? existing.email, mailServerId: input.mailServerId ?? existing.mailServerId });
-    const item = await this.db.mailbox.update({ where: { id }, data: input });
+    await this.checkRelations({ projectId: input.projectId ?? existing.projectId, domainId: input.domainId ?? existing.domainId, email: input.email ?? existing.email, mailServerId: input.mailServerId === undefined ? existing.mailServerId : input.mailServerId }, input.mailServerId !== undefined && input.mailServerId !== existing.mailServerId);
+    const changed = input.mailServerId !== undefined && input.mailServerId !== existing.mailServerId;
+    const reactivated = existing.isActive === false && input.isActive === true;
+    const disabled = input.isActive === false || input.status === 'DISABLED';
+    const item = await this.db.mailbox.update({ where: { id }, data: { ...input, ...((changed || reactivated) ? { connectionConfigVersion: { increment: 1 }, lastError: null } : {}), ...((disabled || changed || reactivated) ? { status: disabled ? 'DISABLED' : 'UNKNOWN' } : {}) } });
     await audit(this.db, request, 'mailbox.updated', 'Mailbox', item.id);
     return item;
   }
@@ -134,12 +140,14 @@ export class MailboxesController {
 export class DashboardController {
   constructor(@Inject(Database) private readonly db: Database) {}
   @Get() async get() {
-    const [projects, domains, mailboxes, healthyMailboxes, issueMailboxes, recentActivity] = await Promise.all([
+    const [projects, domains, mailboxes, healthyMailboxes, warningMailboxes, errorMailboxes, unknownMailboxes, recentActivity] = await Promise.all([
       this.db.project.count(), this.db.domain.count(), this.db.mailbox.count(),
       this.db.mailbox.count({ where: { status: 'HEALTHY', isActive: true } }),
-      this.db.mailbox.count({ where: { status: { in: ['WARNING', 'ERROR'] }, isActive: true } }),
+      this.db.mailbox.count({ where: { status: 'WARNING', isActive: true } }),
+      this.db.mailbox.count({ where: { status: 'ERROR', isActive: true } }),
+      this.db.mailbox.count({ where: { status: 'UNKNOWN', isActive: true } }),
       this.db.auditLog.findMany({ take: 8, orderBy: { createdAt: 'desc' }, select: { id: true, action: true, entityType: true, createdAt: true, user: { select: { name: true } } } }),
     ]);
-    return { projects, domains, mailboxes, healthyMailboxes, issueMailboxes, recentActivity };
+    return { projects, domains, mailboxes, healthyMailboxes, warningMailboxes, errorMailboxes, unknownMailboxes, issueMailboxes: warningMailboxes + errorMailboxes, recentActivity };
   }
 }

@@ -41,8 +41,30 @@ enum MailServerStatus {
 
 enum ProviderType {
   CPANEL
+  GENERIC
   CUSTOM
   OTHER
+}
+
+enum ConnectionSecurity {
+  NONE
+  STARTTLS
+  TLS
+}
+
+enum SmtpAuthMode {
+  PASSWORD
+  NONE
+}
+
+enum MailProtocol {
+  IMAP
+  SMTP
+}
+
+enum ConnectionCheckStatus {
+  SUCCESS
+  FAILED
 }
 
 model User {
@@ -87,14 +109,16 @@ model Domain {
 model MailServer {
   id           String           @id @default(cuid())
   name         String
-  providerType ProviderType     @default(CUSTOM)
+  providerType ProviderType     @default(GENERIC)
   imapHost     String?
   imapPort     Int?
-  imapSecure   Boolean          @default(true)
   smtpHost     String?
   smtpPort     Int?
-  smtpSecure   Boolean          @default(true)
+  imapSecurity ConnectionSecurity @default(TLS)
+  smtpSecurity ConnectionSecurity @default(TLS)
+  smtpAuthMode SmtpAuthMode @default(PASSWORD)
   status       MailServerStatus @default(ACTIVE)
+  lastTestAt DateTime?
   createdAt    DateTime         @default(now())
   updatedAt    DateTime         @updatedAt
   mailboxes    Mailbox[]
@@ -107,7 +131,7 @@ model Mailbox {
   domainId        String
   domain          Domain        @relation(fields: [domainId], references: [id], onDelete: Restrict)
   mailServerId    String?
-  mailServer      MailServer?   @relation(fields: [mailServerId], references: [id], onDelete: SetNull)
+  mailServer      MailServer?   @relation(fields: [mailServerId], references: [id], onDelete: Restrict)
   email           String        @unique
   displayName     String?
   status          MailboxStatus @default(UNKNOWN)
@@ -117,9 +141,42 @@ model Mailbox {
   lastError       String?
   createdAt       DateTime      @default(now())
   updatedAt       DateTime      @updatedAt
+  connectionConfigVersion Int @default(1)
+  credential MailboxCredential?
+  connectionChecks MailboxConnectionCheck[]
 
   @@index([projectId])
   @@index([domainId])
+}
+
+model MailboxCredential {
+  id String @id @default(cuid())
+  mailboxId String @unique
+  mailbox Mailbox @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  username String
+  encryptedPassword String
+  encryptionIv String
+  encryptionAuthTag String
+  encryptionVersion Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastRotatedAt DateTime @default(now())
+}
+
+model MailboxConnectionCheck {
+  id String @id @default(cuid())
+  mailboxId String
+  mailbox Mailbox @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  protocol MailProtocol
+  status ConnectionCheckStatus
+  latencyMs Int
+  errorCode String?
+  errorMessage String?
+  configVersion Int
+  testedAt DateTime @default(now())
+  testedByUserId String?
+
+  @@index([mailboxId, protocol, testedAt])
 }
 
 model ApiKey {

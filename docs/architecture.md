@@ -10,12 +10,22 @@ Browser → Next.js App Router / same-origin API relay → NestJS API
                                            └─ HTTP-only session cookie
 
 BullMQ worker → Redis (idle processors for future mail queues)
-Mailpit (local SMTP capture, not yet connected)
+Mailpit (local SMTP verification target; no message is sent)
 ```
 
-`apps/web` owns the UI and cookie boundary. `apps/api` owns authentication, authorization, registry CRUD, health checks, and audit writes. `apps/worker` owns queue consumers. `packages/shared` holds framework-independent validation and statuses; `packages/config` validates runtime configuration; `packages/database` holds Prisma schema and seed; `packages/mail` marks the future provider adapter boundary.
+`apps/web` owns the UI and cookie boundary. `apps/api` owns authentication, authorization, registry CRUD, manual connection checks, and audit writes. `apps/worker` owns queue consumers. `packages/shared` holds validation and statuses; `packages/config` validates runtime configuration; `packages/database` holds Prisma schema and seed; `packages/security` holds AES-256-GCM encryption; `packages/mail` holds short-lived IMAP and SMTP verification clients.
 
-The API exposes versioned `/api/v1` routes. The currently implemented routes are `/auth/login`, `/auth/me`, `/health`, `/dashboard`, `/projects`, `/domains`, and `/mailboxes`. Future routes can add sending, mailbox checks, and webhooks without changing the browser authentication boundary.
+The API exposes versioned `/api/v1` routes for authentication, the dashboard, registry records, credentials, connection checks, and history. Future sending and webhooks can use the same browser authentication boundary.
+
+## Mail credential trust boundary
+
+```text
+Mailbox → Mailbox Credential Vault → AES-256-GCM → Connectivity Service
+                                                  ├── ImapFlow connect/logout
+                                                  └── Nodemailer verify/close
+```
+
+MailServer stores reusable endpoints and transport modes. MailboxCredential stores username and versioned encrypted password material. The master key exists only in the API environment, never in PostgreSQL. The API decrypts only for a manual test. MailboxConnectionCheck stores per-protocol sanitized outcomes and latency. Changing credentials or server configuration increments a version so old checks no longer define current health. The server UI summarizes assigned mailbox results; it does not claim server health from configuration alone. The connection service is independent of controllers for future worker reuse; no scheduled tests run in this module.
 
 ## Intended mail flow
 
@@ -47,4 +57,4 @@ Future mail credentials should be centrally encrypted with a dedicated managed k
 - The API looks up the user on each request and checks `isActive`; registry controllers require `SUPER_ADMIN`.
 - Prisma relational constraints prevent orphaned domains and mailboxes; the API validates mailbox address, domain, and project consistency.
 - Registry changes write audit events. Request logs contain method, path, status, duration, and request ID but no body or authorization header.
-- No mail credentials, API key plaintext, or synchronized messages are stored in this phase.
+- Encrypted credentials are stored separately from mailboxes. No plaintext mail passwords, API key plaintext, or synchronized messages are stored.

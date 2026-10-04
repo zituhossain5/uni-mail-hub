@@ -4,7 +4,22 @@ export const userRoles = ['SUPER_ADMIN', 'ADMIN', 'MEMBER'] as const;
 export const projectStatuses = ['ACTIVE', 'INACTIVE'] as const;
 export const domainStatuses = ['UNVERIFIED', 'ACTIVE', 'ISSUE', 'DISABLED'] as const;
 export const mailboxStatuses = ['UNKNOWN', 'HEALTHY', 'WARNING', 'ERROR', 'DISABLED'] as const;
-export const providerTypes = ['CPANEL', 'CUSTOM', 'OTHER'] as const;
+export const providerTypes = ['CPANEL', 'GENERIC', 'CUSTOM', 'OTHER'] as const;
+export const connectionSecurities = ['NONE', 'STARTTLS', 'TLS'] as const;
+export const smtpAuthModes = ['PASSWORD', 'NONE'] as const;
+const host = z.string().trim().min(1).max(253).regex(/^[a-zA-Z0-9.[\]:-]+$/);
+const port = z.number().int().min(1).max(65535);
+export const mailServerFields = z.object({
+  name: z.string().trim().min(1).max(120),
+  providerType: z.enum(providerTypes),
+  imapHost: host.nullable().optional(), imapPort: port.nullable().optional(), imapSecurity: z.enum(connectionSecurities),
+  smtpHost: host.nullable().optional(), smtpPort: port.nullable().optional(), smtpSecurity: z.enum(connectionSecurities),
+  smtpAuthMode: z.enum(smtpAuthModes), status: z.enum(['ACTIVE', 'DISABLED']).optional(),
+});
+export const mailServerSchema = mailServerFields.refine(v => Boolean(v.imapHost) === Boolean(v.imapPort), { message: 'IMAP host and port must be set together' })
+  .refine(v => Boolean(v.smtpHost) === Boolean(v.smtpPort), { message: 'SMTP host and port must be set together' })
+  .refine(v => Boolean(v.imapHost || v.smtpHost), { message: 'At least one protocol must be configured' });
+export const credentialSchema = z.object({ username: z.string().trim().min(1).max(320), password: z.string().min(1).max(4096) });
 
 export const projectSchema = z.object({
   name: z.string().trim().min(1).max(120),

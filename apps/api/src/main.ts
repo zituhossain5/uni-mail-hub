@@ -10,6 +10,8 @@ import { readConfig } from '@uni/config';
 import { ApiExceptionFilter, AuthGuard, Database, JsonLogger, Public, RedisConnection, requestLogger } from './core';
 import { AuthController } from './auth';
 import { DashboardController, DomainsController, MailboxesController, ProjectsController } from './registry';
+import { MailServersController } from './mail-servers';
+import { MailConnectivityController } from './mail-connectivity';
 
 const config = readConfig();
 
@@ -28,7 +30,7 @@ class HealthController {
 
 @Module({
   imports: [JwtModule.register({ secret: config.JWT_SECRET }), ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
-  controllers: [HealthController, AuthController, DashboardController, ProjectsController, DomainsController, MailboxesController],
+  controllers: [HealthController, AuthController, DashboardController, ProjectsController, DomainsController, MailboxesController, MailServersController, MailConnectivityController],
   providers: [Database, RedisConnection, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_GUARD, useClass: AuthGuard }, { provide: APP_FILTER, useClass: ApiExceptionFilter }],
 })
 class AppModule {}

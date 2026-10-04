@@ -1,0 +1,10 @@
+'use client';
+import Link from 'next/link';
+import { useEffect, useState } from 'react';
+type Server = { name: string; providerType: string; status: string; imapHost: string | null; imapPort: number | null; imapSecurity: string; smtpHost: string | null; smtpPort: number | null; smtpSecurity: string; smtpAuthMode: string; lastTestAt: string | null; mailboxes: { id: string; email: string; status: string }[] };
+export function MailServerDetail({ id }: { id: string }) {
+  const [server, setServer] = useState<Server | null>(null); const [error, setError] = useState('');
+  useEffect(() => { void fetch(`/api/v1/mail-servers/${id}`).then(async response => { const data = await response.json(); if (!response.ok) throw new Error(data.message ?? 'Unable to load server'); setServer(data); }).catch(e => setError(e instanceof Error ? e.message : 'Unable to load server')); }, [id]);
+  if (!server) return <div className="error-panel">{error || 'Loading mail server…'}</div>;
+  return <><div className="page-heading"><div><div className="eyebrow"><Link href="/mail-servers">MAIL SERVERS</Link> / DETAIL</div><h1>{server.name}</h1><p>{server.providerType} · {server.status}</p></div><Link className="secondary-button" href="/mail-servers">Back to servers</Link></div><div className="dashboard-panels"><section className="panel"><h2>Connection settings</h2><p><strong>IMAP:</strong> {server.imapHost ? `${server.imapHost}:${server.imapPort} · ${server.imapSecurity}` : 'Not configured'}</p><p><strong>SMTP:</strong> {server.smtpHost ? `${server.smtpHost}:${server.smtpPort} · ${server.smtpSecurity}` : 'Not configured'}</p><p><strong>SMTP auth:</strong> {server.smtpAuthMode}</p><p><strong>Last test:</strong> {server.lastTestAt ? new Date(server.lastTestAt).toLocaleString() : 'Never'}</p><p>Test outcomes belong to each mailbox and its credentials.</p></section><section className="panel"><h2>Assigned mailboxes ({server.mailboxes.length})</h2>{server.mailboxes.length ? <ul>{server.mailboxes.map(item => <li key={item.id}><Link href={`/mailboxes/${item.id}`}>{item.email}</Link> · {item.status}</li>)}</ul> : <p>No mailboxes assigned.</p>}</section></div></>;
+}
