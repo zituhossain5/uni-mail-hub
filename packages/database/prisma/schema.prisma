@@ -1,0 +1,154 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/client"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum UserRole {
+  SUPER_ADMIN
+  ADMIN
+  MEMBER
+}
+
+enum ProjectStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum DomainStatus {
+  UNVERIFIED
+  ACTIVE
+  ISSUE
+  DISABLED
+}
+
+enum MailboxStatus {
+  UNKNOWN
+  HEALTHY
+  WARNING
+  ERROR
+  DISABLED
+}
+
+enum MailServerStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ProviderType {
+  CPANEL
+  CUSTOM
+  OTHER
+}
+
+model User {
+  id           String    @id @default(cuid())
+  name         String
+  email        String    @unique
+  passwordHash String
+  role         UserRole  @default(MEMBER)
+  isActive     Boolean   @default(true)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  lastLoginAt  DateTime?
+  auditLogs    AuditLog[]
+}
+
+model Project {
+  id          String        @id @default(cuid())
+  name        String
+  slug        String        @unique
+  description String?
+  status      ProjectStatus @default(ACTIVE)
+  createdAt   DateTime      @default(now())
+  updatedAt   DateTime      @updatedAt
+  domains     Domain[]
+  mailboxes   Mailbox[]
+  apiKeys     ApiKey[]
+}
+
+model Domain {
+  id        String       @id @default(cuid())
+  projectId String
+  project   Project      @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  domain    String       @unique
+  status    DomainStatus @default(UNVERIFIED)
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+  mailboxes Mailbox[]
+
+  @@index([projectId])
+}
+
+model MailServer {
+  id           String           @id @default(cuid())
+  name         String
+  providerType ProviderType     @default(CUSTOM)
+  imapHost     String?
+  imapPort     Int?
+  imapSecure   Boolean          @default(true)
+  smtpHost     String?
+  smtpPort     Int?
+  smtpSecure   Boolean          @default(true)
+  status       MailServerStatus @default(ACTIVE)
+  createdAt    DateTime         @default(now())
+  updatedAt    DateTime         @updatedAt
+  mailboxes    Mailbox[]
+}
+
+model Mailbox {
+  id              String        @id @default(cuid())
+  projectId       String
+  project         Project       @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  domainId        String
+  domain          Domain        @relation(fields: [domainId], references: [id], onDelete: Restrict)
+  mailServerId    String?
+  mailServer      MailServer?   @relation(fields: [mailServerId], references: [id], onDelete: SetNull)
+  email           String        @unique
+  displayName     String?
+  status          MailboxStatus @default(UNKNOWN)
+  isActive        Boolean       @default(true)
+  lastImapCheckAt DateTime?
+  lastSmtpCheckAt DateTime?
+  lastError       String?
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([projectId])
+  @@index([domainId])
+}
+
+model ApiKey {
+  id         String    @id @default(cuid())
+  projectId  String
+  project    Project   @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  name       String
+  keyPrefix  String
+  keyHash    String
+  isActive   Boolean   @default(true)
+  lastUsedAt DateTime?
+  expiresAt  DateTime?
+  createdAt  DateTime  @default(now())
+  updatedAt  DateTime  @updatedAt
+
+  @@index([projectId])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  userId     String?
+  user       User?    @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action     String
+  entityType String
+  entityId   String?
+  metadata   Json?
+  ipAddress  String?
+  createdAt  DateTime @default(now())
+
+  @@index([createdAt])
+  @@index([userId])
+}

@@ -1,0 +1,1 @@
+{"name":"@uni/database","version":"0.1.0","private":true,"main":"generated/client/index.js","types":"generated/client/index.d.ts","dependencies":{"@prisma/client":"^6.19.0","argon2":"^0.44.0"},"devDependencies":{"prisma":"^6.19.0"}}
