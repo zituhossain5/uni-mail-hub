@@ -6,6 +6,8 @@ import { readConfig } from '@uni/config';
 import { decodeEncryptionKey, decryptSecret } from '@uni/security';
 import { classifySendError, sendSmtp } from '@uni/mail';
 import { queueNames } from '@uni/shared';
+import { processMailboxSync } from './imap-sync';
+import { withMailboxSyncLease } from './sync-lease';
 
 const config = readConfig();
 const key = decodeEncryptionKey(config.MAIL_CREDENTIAL_ENCRYPTION_KEY);
@@ -13,9 +15,51 @@ const log = pino({ name: 'uni-mail-worker', redact: ['password', 'rawKey', 'auth
 const db = new PrismaClient();
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null, lazyConnect: true });
 const queue = new Queue('mail-send', { connection });
+const syncQueue = new Queue('mail-sync', { connection });
 const workers: Worker[] = [];
 let timer: NodeJS.Timeout | undefined;
+let syncTimer: NodeJS.Timeout | undefined;
 let dispatching = false;
+let syncScheduleTask: Promise<void> | null = null;
+
+async function scheduleSync() {
+  try {
+    let cursor: string | undefined;
+    for (;;) {
+      const mailboxes = await db.mailbox.findMany({
+        where: { isActive: true, status: { not: 'DISABLED' }, credential: { isNot: null }, mailServer: { is: { status: 'ACTIVE', imapHost: { not: null }, imapPort: { not: null } } } },
+        select: { id: true }, orderBy: { id: 'asc' }, take: 100, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+      });
+      for (const mailbox of mailboxes) await syncQueue.add('sync', { mailboxId: mailbox.id }, { jobId: `sync-${mailbox.id}`, attempts: 4, backoff: { type: 'exponential', delay: 30000 }, removeOnComplete: true, removeOnFail: true });
+      if (mailboxes.length < 100) break;
+      cursor = mailboxes.at(-1)?.id;
+    }
+  } catch (error) { log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'mail sync scheduling deferred'); }
+}
+
+function triggerSyncSchedule() {
+  if (syncScheduleTask) return syncScheduleTask;
+  syncScheduleTask = scheduleSync().finally(() => { syncScheduleTask = null; });
+  return syncScheduleTask;
+}
+
+async function recoverSyncRuns() {
+  let cursor: string | undefined;
+  for (;;) {
+    const runs = await db.mailSyncRun.findMany({ where: { status: 'RUNNING', ...(cursor ? { id: { gt: cursor } } : {}) }, select: { id: true, mailboxId: true }, orderBy: { id: 'asc' }, take: 100 });
+    for (const run of runs) {
+      if (await connection.exists(`mail-sync:lease:${run.mailboxId}`)) continue;
+      await db.mailSyncRun.updateMany({ where: { id: run.id, status: 'RUNNING' }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'SYNC_INTERRUPTED', errorMessage: 'Synchronization was interrupted before completion.' } });
+    }
+    if (runs.length < 100) break;
+    cursor = runs.at(-1)?.id;
+  }
+}
+
+async function processSyncJob(mailboxId: string) {
+  const claimed = await withMailboxSyncLease(connection, mailboxId, signal => processMailboxSync(db, config, key, log, mailboxId, signal));
+  if (!claimed) log.info({ mailboxId }, 'overlapping mailbox sync skipped');
+}
 
 async function dispatchOutbox() {
   if (dispatching) return;
@@ -90,8 +134,10 @@ let closing = false;
 async function shutdown() {
   if (closing) return; closing = true;
   if (timer) clearInterval(timer);
+  if (syncTimer) clearInterval(syncTimer);
+  if (syncScheduleTask) await syncScheduleTask;
   await Promise.all(workers.map(worker => worker.close()));
-  await queue.close(); await connection.quit(); await db.$disconnect();
+  await queue.close(); await syncQueue.close(); await connection.quit(); await db.$disconnect();
   log.info('worker stopped'); process.exit(0);
 }
 
@@ -100,14 +146,18 @@ async function main() {
   for (const name of queueNames) {
     const worker = new Worker(name, async job => {
       if (name === 'mail-send') return processMessage(String(job.data.messageId));
+      if (name === 'mail-sync') return processSyncJob(String(job.data.mailboxId));
       throw new Error(`Processor for ${job.queueName} is not implemented`);
-    }, { connection, concurrency: name === 'mail-send' ? config.MAIL_SEND_WORKER_CONCURRENCY : 1 });
+    }, { connection, concurrency: name === 'mail-send' ? config.MAIL_SEND_WORKER_CONCURRENCY : name === 'mail-sync' ? config.MAIL_SYNC_WORKER_CONCURRENCY : 1 });
     worker.on('failed', (job, error) => log.error({ queue: name, jobId: job?.id, errorType: error.name }, 'job failed'));
     worker.on('error', error => log.error({ queue: name, errorType: error.name }, 'worker error'));
     workers.push(worker);
   }
   await recoverStale(); await dispatchOutbox();
+  await recoverSyncRuns();
+  await triggerSyncSchedule();
   timer = setInterval(() => { void recoverStale().then(dispatchOutbox).catch(error => log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'reconciliation deferred')); }, 5000);
+  syncTimer = setInterval(() => { void triggerSyncSchedule(); }, config.MAIL_SYNC_INTERVAL_MINUTES * 60000);
   log.info({ queues: queueNames, concurrency: config.MAIL_SEND_WORKER_CONCURRENCY }, 'worker ready');
 }
 process.on('SIGINT', () => void shutdown()); process.on('SIGTERM', () => void shutdown());

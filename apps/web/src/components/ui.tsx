@@ -7,7 +7,7 @@ export function PageHeader({ eyebrow, title, description, status, actions }: { e
 
 const tones: Record<string, string> = {
   ACTIVE: 'success', HEALTHY: 'success', SUCCESS: 'success', CONFIGURED: 'success', SMTP_ACCEPTED: 'success', ACCEPTED: 'success',
-  WARNING: 'warning', UNKNOWN: 'neutral', UNVERIFIED: 'warning', PROCESSING: 'info', QUEUED: 'info', RETRY_SCHEDULED: 'warning', SMTP_ACCEPTED_WITH_REJECTIONS: 'warning', PARTIAL: 'warning',
+  WARNING: 'warning', UNKNOWN: 'neutral', UNVERIFIED: 'warning', PROCESSING: 'info', RUNNING: 'info', QUEUED: 'info', RETRY_SCHEDULED: 'warning', SMTP_ACCEPTED_WITH_REJECTIONS: 'warning', PARTIAL: 'warning',
   ERROR: 'danger', FAILED: 'danger', REVOKED: 'danger', EXPIRED: 'danger', DISABLED: 'neutral', INACTIVE: 'neutral', CANCELLED: 'neutral', PENDING: 'neutral',
 };
 export function StatusBadge({ status, label }: { status: string; label?: string }) {

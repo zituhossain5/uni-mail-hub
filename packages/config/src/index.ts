@@ -16,6 +16,13 @@ const schema = z.object({
   MAIL_SEND_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(50).default(5),
   MAIL_MAX_RECIPIENTS: z.coerce.number().int().min(1).max(500).default(50),
   MAIL_MAX_BODY_BYTES: z.coerce.number().int().min(1024).max(10485760).default(1048576),
+  MAIL_SYNC_INITIAL_DAYS: z.coerce.number().int().min(1).max(3650).default(30),
+  MAIL_SYNC_INITIAL_MAX_MESSAGES: z.coerce.number().int().min(1).max(10000).default(1000),
+  MAIL_SYNC_MAX_MESSAGE_BYTES: z.coerce.number().int().min(1024).max(104857600).default(26214400),
+  MAIL_SYNC_WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(20).default(3),
+  MAIL_SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(1440).default(5),
+  MAIL_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(250),
+  MAIL_SYNC_FLAG_REFRESH_LIMIT: z.coerce.number().int().min(0).max(5000).default(500),
 });
 
 export function readConfig() {

@@ -66,3 +66,6 @@ export async function sendSmtp(input: { endpoint: Endpoint; auth: { user: string
     return { accepted: result.accepted.map(String).map(value => value.toLowerCase()), rejected: result.rejected.map(String).map(value => value.toLowerCase()), pending: result.pending?.map(String).map(value => value.toLowerCase()) ?? [], messageId: result.messageId, responseCode: Number(result.response?.match(/^([0-9]{3})/)?.[1]) || null };
   } finally { transport.close(); }
 }
+
+export { createSyncClient, folderSpecialUse, initialUids, advanceCursor, classifySyncError, parseSyncMessage } from './imap-sync';
+export type { SyncMessage, SyncRecipient, SyncAttachment } from './imap-sync';

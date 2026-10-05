@@ -1,1 +1,1 @@
-{"name":"@uni/mail","version":"0.1.0","private":true,"main":"src/index.ts","types":"src/index.ts","dependencies":{"imapflow":"^1.0.200","nodemailer":"^7.0.0"},"devDependencies":{"@types/nodemailer":"^7.0.0"}}
+{"name":"@uni/mail","version":"0.1.0","private":true,"main":"src/index.ts","types":"src/index.ts","dependencies":{"imapflow":"^1.0.200","mailparser":"^3.9.34","nodemailer":"^7.0.0"},"devDependencies":{"@types/mailparser":"^3.9.0","@types/nodemailer":"^7.0.0"}}

@@ -149,9 +149,141 @@ model Mailbox {
   apiKeyGrants ApiKeyMailboxGrant[]
   outgoingMessages OutgoingMessage[]
   smtpAttempts SmtpAttempt[]
+  folders MailFolder[]
+  syncedMessages MailMessage[]
+  syncRuns MailSyncRun[]
 
   @@index([projectId])
   @@index([domainId])
+}
+
+enum MailFolderSpecialUse {
+  INBOX
+  SENT
+  DRAFTS
+  TRASH
+  JUNK
+  ARCHIVE
+  OTHER
+}
+
+enum MailContentStatus {
+  COMPLETE
+  SKIPPED_TOO_LARGE
+  PARSE_FAILED
+}
+
+enum MailSyncStatus {
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum MailRecipientType {
+  TO
+  CC
+  BCC
+  REPLY_TO
+}
+
+model MailFolder {
+  id               String               @id @default(cuid())
+  mailboxId        String
+  mailbox          Mailbox              @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  path             String
+  name             String
+  delimiter        String?
+  specialUse       MailFolderSpecialUse @default(OTHER)
+  isSelectable     Boolean              @default(true)
+  uidValidity      String?
+  uidNext          BigInt?
+  highestSyncedUid BigInt               @default(0)
+  messageCount     Int?
+  unseenCount      Int?
+  lastSyncedAt     DateTime?
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
+  messages         MailMessage[]
+
+  @@unique([mailboxId, path])
+  @@index([mailboxId, specialUse])
+}
+
+model MailMessage {
+  id              String            @id @default(cuid())
+  mailboxId       String
+  mailbox         Mailbox           @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  folderId        String
+  folder          MailFolder        @relation(fields: [folderId], references: [id], onDelete: Cascade)
+  imapUid         BigInt
+  messageIdHeader String?
+  subject         String?
+  date            DateTime?
+  internalDate    DateTime?
+  fromName        String?
+  fromEmail       String?
+  textBody        String?           @db.Text
+  htmlBody        String?           @db.Text
+  sizeBytes       BigInt?
+  contentStatus   MailContentStatus @default(COMPLETE)
+  isSeen          Boolean           @default(false)
+  isFlagged       Boolean           @default(false)
+  isAnswered      Boolean           @default(false)
+  isDraft         Boolean           @default(false)
+  isDeleted       Boolean           @default(false)
+  inReplyTo       String?
+  references      String[]          @default([])
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  recipients      MailRecipient[]
+  attachments     MailAttachment[]
+
+  @@unique([folderId, imapUid])
+  @@index([mailboxId, internalDate])
+}
+
+model MailRecipient {
+  id        String            @id @default(cuid())
+  messageId String
+  message   MailMessage       @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  type      MailRecipientType
+  name      String?
+  email     String
+
+  @@index([messageId, type])
+}
+
+model MailAttachment {
+  id          String      @id @default(cuid())
+  messageId   String
+  message     MailMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  filename    String?
+  contentType String
+  sizeBytes   BigInt?
+  contentId   String?
+  disposition String?
+  imapPart    String?
+
+  @@index([messageId])
+}
+
+model MailSyncRun {
+  id               String         @id @default(cuid())
+  mailboxId        String
+  mailbox          Mailbox        @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  status           MailSyncStatus @default(RUNNING)
+  startedAt        DateTime       @default(now())
+  completedAt      DateTime?
+  foldersProcessed Int            @default(0)
+  messagesAdded    Int            @default(0)
+  messagesUpdated  Int            @default(0)
+  errorCode        String?
+  errorMessage     String?
+  createdAt        DateTime       @default(now())
+
+  @@index([mailboxId, startedAt])
+  @@index([status, startedAt])
 }
 
 model MailboxCredential {

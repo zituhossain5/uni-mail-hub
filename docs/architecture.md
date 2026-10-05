@@ -7,9 +7,10 @@ Client application -> project API key -> NestJS sending API -> PostgreSQL messag
                                                                          -> credential vault
                                                                          -> configured SMTP server
 Mailpit -> local SMTP capture for tests
+IMAP server -> read-only ImapFlow worker -> PostgreSQL folders/messages/sync runs
 ```
 
-`apps/web` owns the admin UI and HTTP-only session cookie. `apps/api` owns human authentication, project/mailbox/API-key authorization, registry writes, sending request validation, and audits. `apps/worker` owns SMTP queue consumers and outbox reconciliation. `packages/database` defines business state; `packages/shared` validates requests; `packages/config` validates environment settings; `packages/security` hashes API keys and encrypts credentials; `packages/mail` creates short-lived SMTP transports and classifies send failures.
+`apps/web` owns the admin UI and HTTP-only session cookie. `apps/api` owns human authentication, project/mailbox/API-key authorization, registry writes, sending request validation, sync enqueueing, and audits. `apps/worker` owns SMTP queue consumers, outbox reconciliation, scheduled IMAP sync, and short-lived read-only IMAP connections. `packages/database` defines business state; `packages/shared` validates requests; `packages/config` validates environment settings; `packages/security` hashes API keys and encrypts credentials; `packages/mail` contains transport helpers, MIME parsing, and safe error classification.
 
 ## Sending flow
 
@@ -25,6 +26,10 @@ The sender display name/address come from the mailbox. The request cannot provid
 
 `MailServer` stores reusable endpoints and transport modes. `MailboxCredential` stores username and versioned AES-256-GCM encrypted password material. The Base64 master key exists only in the API/worker environment, never in PostgreSQL. The API decrypts for manual connection tests; the worker decrypts only when sending through password-authenticated SMTP. Credentials never enter BullMQ jobs or client responses. Mailbox connection checks are manual and record sanitized per-protocol outcomes. Changing credentials or server configuration increments a version so old checks no longer define current health.
 
+## IMAP synchronization
+
+The admin API enqueues `mail-sync` jobs containing only a mailbox ID. The worker decrypts credentials locally, takes a per-mailbox Redis lease, discovers folders, opens each selectable folder with IMAP `EXAMINE`/read-only mode, and stores bounded recent messages and sync runs. PostgreSQL uniqueness on `(folderId, imapUid)` prevents duplicates. UIDVALIDITY changes clear only that folder's local message namespace before a bounded rebuild. Details, limits, retry policy, and test procedure are in [imap-sync.md](imap-sync.md). The mailbox detail page shows status and counts but does not render message HTML.
+
 ## Existing and future features
 
-Human admin routes use JWT through the web relay. The API checks users in the database and requires `SUPER_ADMIN` for registry and send-management actions. The application sending route uses a separate API-key guard. Module 1 registry and Module 2 connectivity tests remain available. IMAP synchronization, bounce handling, delivery tracking, bulk campaigns, and provider API integration are outside this module.
+Human admin routes use JWT through the web relay. The API checks users in the database and requires `SUPER_ADMIN` for registry, sync, and send-management actions. The application sending route uses a separate API-key guard. Module 1 registry and Module 2 connectivity tests remain available. Full inbox UI, bounce handling, delivery tracking, bulk campaigns, and provider API integration are deferred.
