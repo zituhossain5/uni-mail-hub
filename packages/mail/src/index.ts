@@ -69,3 +69,4 @@ export async function sendSmtp(input: { endpoint: Endpoint; auth: { user: string
 
 export { createSyncClient, folderSpecialUse, initialUids, advanceCursor, classifySyncError, parseSyncMessage } from './imap-sync';
 export type { SyncMessage, SyncRecipient, SyncAttachment } from './imap-sync';
+export { headerId, headerThreadKey, threadKeyFor } from './threading';

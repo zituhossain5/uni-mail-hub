@@ -106,6 +106,54 @@ export class ClientMessagesController {
 }
 
 @SuperAdmin()
+@Controller('admin/compose')
+export class AdminComposeController {
+  constructor(@Inject(Database) private readonly db: Database, @Inject(MailQueue) private readonly queue: MailQueue) {}
+
+  @Post() @HttpCode(202)
+  async submit(@Body() body: unknown, @Headers('idempotency-key') idempotencyKey: string | undefined, @Req() request: AuthedRequest) {
+    if (!idempotencyKey || !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) throw problem('IDEMPOTENCY_KEY_REQUIRED', 'A valid Idempotency-Key header is required');
+    const input = parse(sendMessageSchema, body);
+    const to = input.to ?? []; const cc = input.cc ?? []; const bcc = input.bcc ?? [];
+    if (to.length + cc.length + bcc.length > config.MAIL_MAX_RECIPIENTS) throw problem('TOO_MANY_RECIPIENTS', 'Recipient limit exceeded');
+    if (Buffer.byteLength(JSON.stringify(input), 'utf8') > config.MAIL_MAX_BODY_BYTES) throw problem('MESSAGE_TOO_LARGE', 'Message body limit exceeded', 413);
+    const mailbox = await this.db.mailbox.findUnique({ where: { id: input.fromMailboxId }, include: { mailServer: true, credential: { select: { id: true } } } });
+    if (!mailbox) throw problem('SENDER_NOT_AUTHORIZED', 'Select a managed sender mailbox', 403);
+    if (!mailbox.isActive || mailbox.status === 'DISABLED') throw problem('MAILBOX_DISABLED', 'Sender mailbox is disabled', 409);
+    if (!mailbox.mailServer || !mailbox.mailServer.smtpHost || !mailbox.mailServer.smtpPort || mailbox.mailServer.status !== 'ACTIVE') throw problem('MAILBOX_NOT_CONFIGURED', 'Sender mailbox needs an active SMTP server', 409);
+    if (mailbox.mailServer.smtpAuthMode === 'PASSWORD' && !mailbox.credential) throw problem('MAIL_CREDENTIAL_NOT_CONFIGURED', 'Sender mailbox credentials are missing', 409);
+    const requestHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    const identity = { createdByUserId: request.user.id, idempotencyKey };
+    const existing = await this.db.outgoingMessage.findUnique({ where: { createdByUserId_idempotencyKey: identity }, select: { id: true, requestHash: true, status: true, createdAt: true } });
+    if (existing) {
+      if (existing.requestHash !== requestHash) throw problem('IDEMPOTENCY_CONFLICT', 'This submission key was used with different content', 409);
+      const event = await this.db.outboxEvent.findFirst({ where: { messageId: existing.id, status: 'READY', availableAt: { lte: new Date() } }, orderBy: { createdAt: 'desc' } });
+      if (event) await this.publish(event.id, existing.id);
+      return { id: existing.id, status: existing.status, createdAt: existing.createdAt };
+    }
+    const recipients = [...to.map(value => ({ ...value, type: 'TO' as const })), ...cc.map(value => ({ ...value, type: 'CC' as const })), ...bcc.map(value => ({ ...value, type: 'BCC' as const }))];
+    let created: { id: string; status: string; createdAt: Date; outboxEvents: { id: string }[] };
+    try {
+      created = await this.db.outgoingMessage.create({ data: { projectId: mailbox.projectId, createdByUserId: request.user.id, fromMailboxId: mailbox.id, subject: input.subject, textBody: input.text, htmlBody: input.html, replyToEmail: input.replyTo?.email, replyToName: input.replyTo?.name, idempotencyKey, requestHash, recipients: { create: recipients }, outboxEvents: { create: {} } }, select: { id: true, status: true, createdAt: true, outboxEvents: { select: { id: true } } } });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const raced = await this.db.outgoingMessage.findUnique({ where: { createdByUserId_idempotencyKey: identity }, select: { id: true, requestHash: true, status: true, createdAt: true } });
+        if (raced) { if (raced.requestHash !== requestHash) throw problem('IDEMPOTENCY_CONFLICT', 'This submission key was used with different content', 409); return { id: raced.id, status: raced.status, createdAt: raced.createdAt }; }
+      }
+      throw error;
+    }
+    await this.db.auditLog.create({ data: { userId: request.user.id, action: 'WEBMAIL_COMPOSE_QUEUED', entityType: 'OutgoingMessage', entityId: created.id, ipAddress: request.ip } });
+    await this.publish(created.outboxEvents[0]!.id, created.id);
+    return { id: created.id, status: created.status, createdAt: created.createdAt };
+  }
+
+  private async publish(eventId: string, messageId: string) {
+    try { await this.queue.publish(eventId, messageId); await this.db.outboxEvent.update({ where: { id: eventId }, data: { status: 'PUBLISHED', publishedAt: new Date() } }); }
+    catch { throw problem('QUEUE_UNAVAILABLE', 'Message saved, but delivery is temporarily unavailable. Check Outgoing Mail.', 503); }
+  }
+}
+
+@SuperAdmin()
 @Controller('admin/messages')
 export class AdminMessagesController {
   constructor(@Inject(Database) private readonly db: Database, @Inject(MailQueue) private readonly queue: MailQueue) {}

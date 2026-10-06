@@ -1,7 +1,7 @@
 import { PrismaClient } from '@uni/database';
 import { readConfig } from '@uni/config';
 import { decryptSecret } from '@uni/security';
-import { advanceCursor, classifySyncError, createSyncClient, folderSpecialUse, initialUids, parseSyncMessage, type SyncMessage } from '@uni/mail';
+import { advanceCursor, classifySyncError, createSyncClient, folderSpecialUse, headerId, initialUids, parseSyncMessage, threadKeyFor, type SyncMessage } from '@uni/mail';
 import type pino from 'pino';
 
 type Config = ReturnType<typeof readConfig>;
@@ -31,7 +31,14 @@ export async function saveMessage(db: PrismaClient, mailboxId: string, folderId:
     } else {
       if (!data) throw new Error('SYNC_SOURCE_MISSING');
       const { recipients, attachments, ...fields } = data;
-      const record = await tx.mailMessage.create({ data: { mailboxId, folderId, imapUid: uid, ...fields } });
+      const hasValidReference = data.references.some(value => !!headerId(value));
+      const parentId = !hasValidReference && headerId(data.inReplyTo);
+      const parent = parentId ? await tx.mailMessage.findMany({ where: { folderId, messageIdHeader: { in: [parentId, `<${parentId}>`], mode: 'insensitive' } }, select: { threadKey: true }, take: 2 }) : [];
+      const parentKey = parent.length === 1 ? parent[0]?.threadKey : null;
+      let threadKey = threadKeyFor(data, folderId, uid, parentKey);
+      const ownId = !hasValidReference && !parentId && headerId(data.messageIdHeader);
+      if (ownId && await tx.mailMessage.count({ where: { folderId, messageIdHeader: { in: [ownId, `<${ownId}>`], mode: 'insensitive' } } })) threadKey = `local:${folderId}:${uid}`;
+      const record = await tx.mailMessage.create({ data: { mailboxId, folderId, imapUid: uid, ...fields, threadKey } });
       if (recipients.length) await tx.mailRecipient.createMany({ data: recipients.map(recipient => ({ messageId: record.id, ...recipient })) });
       if (attachments.length) await tx.mailAttachment.createMany({ data: attachments.map(attachment => ({ messageId: record.id, ...attachment })) });
     }

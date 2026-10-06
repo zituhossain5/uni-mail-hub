@@ -23,7 +23,7 @@ async function relay(request: NextRequest, context: { params: Promise<{ path: st
   try {
     const upstream = await fetch(`${api}/api/v1/${path.map(encodeURIComponent).join('/')}${request.nextUrl.search}`, {
       method: request.method,
-      headers: { 'Content-Type': 'application/json', ...(token && !isLogin ? { Authorization: `Bearer ${token}` } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(token && !isLogin ? { Authorization: `Bearer ${token}` } : {}), ...(request.headers.get('idempotency-key') ? { 'Idempotency-Key': request.headers.get('idempotency-key')! } : {}) },
       body: request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text(),
       cache: 'no-store',
     });

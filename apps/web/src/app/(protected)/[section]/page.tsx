@@ -4,13 +4,17 @@ import { Placeholder } from '@/components/placeholder';
 import { MailServers } from '@/components/mail-servers';
 import { ApiKeys } from '@/components/api-keys';
 import { OutgoingMail } from '@/components/outgoing-mail';
+import { Webmail } from '@/components/webmail';
 
-export default async function SectionPage({ params }: { params: Promise<{ section: string }> }) {
+export default async function SectionPage({ params, searchParams }: { params: Promise<{ section: string }>; searchParams: Promise<{ mailbox?: string }> }) {
   const { section } = await params;
+  const { mailbox } = await searchParams;
   if (section === 'projects' || section === 'domains' || section === 'mailboxes') return <Registry kind={section}/>;
   if (section === 'mail-servers') return <MailServers/>;
   if (section === 'api-keys') return <ApiKeys/>;
   if (section === 'outgoing-mail') return <OutgoingMail/>;
-  if (['inbox','sent','drafts','templates','monitoring','logs','settings'].includes(section)) return <Placeholder section={section}/>;
+  const mailFolders = { inbox: 'INBOX', sent: 'SENT', drafts: 'DRAFTS', spam: 'JUNK', trash: 'TRASH', archive: 'ARCHIVE' } as const;
+  if (section in mailFolders) return <Webmail specialUse={mailFolders[section as keyof typeof mailFolders]} initialMailboxId={mailbox}/>;
+  if (['templates','monitoring','logs','settings'].includes(section)) return <Placeholder section={section}/>;
   notFound();
 }

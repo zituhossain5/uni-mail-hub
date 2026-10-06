@@ -63,6 +63,8 @@ test('message transaction writes dependents before cursor, ignores duplicate UID
   const tx = {
     mailMessage: {
       findUnique: async () => existing,
+      count: async () => 0,
+      findMany: async () => [],
       create: async () => { events.push('message'); return { id: 'message-1' }; },
       update: async () => { events.push('flags'); },
     },
@@ -71,7 +73,7 @@ test('message transaction writes dependents before cursor, ignores duplicate UID
     mailFolder: { findUniqueOrThrow: async () => ({ highestSyncedUid: 0n }), update: async () => { events.push('cursor'); } },
   };
   const db = { $transaction: async (work: (value: typeof tx) => Promise<unknown>) => work(tx) } as unknown as PrismaClient;
-  const data = { recipients: [{ type: 'TO', name: null, email: 'to@example.test' }], attachments: [{ filename: 'a.txt', contentType: 'text/plain', sizeBytes: 1n, contentId: null, disposition: 'attachment', imapPart: '2' }] } as SyncMessage;
+  const data = { messageIdHeader: '<one@example.test>', references: [], inReplyTo: null, recipients: [{ type: 'TO', name: null, email: 'to@example.test' }], attachments: [{ filename: 'a.txt', contentType: 'text/plain', sizeBytes: 1n, contentId: null, disposition: 'attachment', imapPart: '2' }] } as SyncMessage;
   const flags = { isSeen: false, isFlagged: false, isAnswered: false, isDraft: false, isDeleted: false };
   assert.deepEqual(await saveMessage(db, 'box', 'folder', 1n, data, flags), { added: true, updated: false });
   assert.deepEqual(events, ['message', 'recipients', 'attachments', 'cursor']);

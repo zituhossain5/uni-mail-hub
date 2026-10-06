@@ -20,7 +20,7 @@ PostgreSQL is the authority for key grants, idempotency, messages, recipient sta
 
 The worker claims a queued message atomically, reads its configured mailbox and server, decrypts a password only if SMTP authentication needs it, opens an SMTP connection, and sends via Nodemailer. Each attempt stores timestamps, sanitized response/error codes, and recipient results. Transient failures schedule exponential backoff through the outbox. Permanent/authentication failures become `FAILED`. Partially accepted recipients are not resent automatically. The admin can manually retry a final failure. An accepted message ignores duplicate queue jobs.
 
-The sender display name/address come from the mailbox. The request cannot provide SMTP secrets or arbitrary headers. `SMTP_ACCEPTED` records upstream SMTP acceptance, not final inbox delivery. If SMTP accepts a message and a worker crashes before its database write, recovery may submit it again. The system provides idempotent API submission and durable processing, but cannot promise exactly-once SMTP delivery. The UI's **Outgoing Mail** view contains API-submitted messages; it is not an IMAP Sent folder.
+The sender display name/address come from the mailbox. The request cannot provide SMTP secrets or arbitrary headers. `SMTP_ACCEPTED` records upstream SMTP acceptance, not final inbox delivery. If SMTP accepts a message and a worker crashes before its database write, recovery may submit it again. The system provides idempotent submission and durable processing, but cannot promise exactly-once SMTP delivery. The UI's **Outgoing Mail** view contains API-submitted and admin-composed messages; it is not an IMAP Sent folder.
 
 ## Mail credential boundary
 
@@ -30,6 +30,10 @@ The sender display name/address come from the mailbox. The request cannot provid
 
 The admin API enqueues `mail-sync` jobs containing only a mailbox ID. The worker decrypts credentials locally, takes a per-mailbox Redis lease, discovers folders, opens each selectable folder with IMAP `EXAMINE`/read-only mode, and stores bounded recent messages and sync runs. PostgreSQL uniqueness on `(folderId, imapUid)` prevents duplicates. UIDVALIDITY changes clear only that folder's local message namespace before a bounded rebuild. Details, limits, retry policy, and test procedure are in [imap-sync.md](imap-sync.md). The mailbox detail page shows status and counts but does not render message HTML.
 
+## Webmail
+
+Authenticated webmail APIs return mailbox-scoped folder and conversation data from PostgreSQL. A persistent thread key derived from References/In-Reply-To/Message-ID groups messages conservatively; 50-item keyset pages keep list payloads light, and the reader fetches bodies only when opened. The API sanitizes HTML, and the browser uses a sandboxed frame with remote images blocked by default. Admin compose writes through the existing outgoing-message/outbox model and SMTP worker. See [webmail.md](webmail.md) for navigation, rendering, and limitations.
+
 ## Existing and future features
 
-Human admin routes use JWT through the web relay. The API checks users in the database and requires `SUPER_ADMIN` for registry, sync, and send-management actions. The application sending route uses a separate API-key guard. Module 1 registry and Module 2 connectivity tests remain available. Full inbox UI, bounce handling, delivery tracking, bulk campaigns, and provider API integration are deferred.
+Human admin routes use JWT through the web relay. The API checks users in the database and requires `SUPER_ADMIN` for registry, sync, webmail, and send-management actions. The application sending route uses a separate API-key guard. Module 1 registry and Module 2 connectivity tests remain available. IMAP mail actions, bounce handling, delivery tracking, bulk campaigns, and provider API integration are deferred.

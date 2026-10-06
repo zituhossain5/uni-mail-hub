@@ -79,6 +79,7 @@ model User {
   lastLoginAt  DateTime?
   auditLogs    AuditLog[]
   createdApiKeys ApiKey[] @relation("ApiKeyCreator")
+  composedMessages OutgoingMessage[] @relation("WebmailComposeCreator")
 }
 
 model Project {
@@ -218,6 +219,7 @@ model MailMessage {
   folder          MailFolder        @relation(fields: [folderId], references: [id], onDelete: Cascade)
   imapUid         BigInt
   messageIdHeader String?
+  threadKey       String?
   subject         String?
   date            DateTime?
   internalDate    DateTime?
@@ -241,6 +243,8 @@ model MailMessage {
 
   @@unique([folderId, imapUid])
   @@index([mailboxId, internalDate])
+  @@index([mailboxId, messageIdHeader], map: "MailMessage_mailbox_header_idx")
+  @@index([folderId, threadKey, internalDate, id], map: "MailMessage_folder_thread_date_idx")
 }
 
 model MailRecipient {
@@ -389,8 +393,10 @@ model OutgoingMessage {
   id String @id @default(cuid())
   projectId String
   project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
-  apiKeyId String
-  apiKey ApiKey @relation(fields: [apiKeyId], references: [id], onDelete: Restrict)
+  apiKeyId String?
+  apiKey ApiKey? @relation(fields: [apiKeyId], references: [id], onDelete: Restrict)
+  createdByUserId String?
+  createdBy User? @relation("WebmailComposeCreator", fields: [createdByUserId], references: [id], onDelete: SetNull)
   fromMailboxId String
   fromMailbox Mailbox @relation(fields: [fromMailboxId], references: [id], onDelete: Restrict)
   subject String
@@ -417,6 +423,7 @@ model OutgoingMessage {
   outboxEvents OutboxEvent[]
 
   @@unique([apiKeyId, idempotencyKey])
+  @@unique([createdByUserId, idempotencyKey], map: "OutgoingMessage_admin_idempotency_key")
   @@index([projectId, createdAt])
   @@index([status, createdAt])
 }
