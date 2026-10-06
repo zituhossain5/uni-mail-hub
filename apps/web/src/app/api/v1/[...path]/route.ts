@@ -27,6 +27,14 @@ async function relay(request: NextRequest, context: { params: Promise<{ path: st
       body: request.method === 'GET' || request.method === 'HEAD' ? undefined : await request.text(),
       cache: 'no-store',
     });
+    if (!upstream.headers.get('content-type')?.includes('application/json')) {
+      const headers = new Headers({ 'Cache-Control': 'private, no-store', 'X-Content-Type-Options': 'nosniff', 'Cross-Origin-Resource-Policy': 'same-origin' });
+      for (const name of ['content-type', 'content-disposition']) {
+        const value = upstream.headers.get(name);
+        if (value) headers.set(name, value);
+      }
+      return new NextResponse(upstream.body, { status: upstream.status, headers });
+    }
     const data: unknown = await upstream.json();
     if (isLogin && upstream.ok && typeof data === 'object' && data !== null && 'token' in data && typeof data.token === 'string') {
       const response = NextResponse.json({ user: 'user' in data ? data.user : null });

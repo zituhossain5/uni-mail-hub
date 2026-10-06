@@ -23,6 +23,7 @@ const schema = z.object({
   MAIL_SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(1440).default(5),
   MAIL_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(250),
   MAIL_SYNC_FLAG_REFRESH_LIMIT: z.coerce.number().int().min(0).max(5000).default(500),
+  MAIL_ATTACHMENT_MAX_BYTES: z.coerce.number().int().min(1024).max(104857600).default(10485760),
 });
 
 export function readConfig() {

@@ -1,8 +1,11 @@
 import { Controller, Get, HttpException, Inject, Param, Query } from '@nestjs/common';
 import { Prisma } from '@uni/database';
+import { readConfig } from '@uni/config';
 import { z } from 'zod';
 import { Database, SuperAdmin, parse } from './core';
-import { safeEmailHtml, safePreview } from './webmail-html';
+import { normalizedCid, safeEmailHtml, safePreview } from './webmail-html';
+
+const attachmentLimit = BigInt(readConfig().MAIL_ATTACHMENT_MAX_BYTES);
 
 const idSchema = z.string().cuid();
 const threadSchema = z.string().regex(/^(h:[a-f0-9]{32}|local:[A-Za-z0-9:_-]+)$/);
@@ -93,16 +96,16 @@ export class WebmailMessagesController {
     const selected = positions.slice(0, 20);
     const messages = await this.db.mailMessage.findMany({ where: { id: { in: selected.map(item => item.id) }, folderId: folder.id }, select: {
       id: true, subject: true, date: true, internalDate: true, fromName: true, fromEmail: true, contentStatus: true, isSeen: true, isFlagged: true,
-      recipients: { select: { type: true, name: true, email: true } }, attachments: { select: { filename: true, contentType: true, sizeBytes: true, disposition: true, contentId: true } },
+      recipients: { select: { type: true, name: true, email: true } }, attachments: { select: { id: true, filename: true, contentType: true, sizeBytes: true, disposition: true, contentId: true, imapPart: true } },
     } });
     const byId = new Map(messages.map(message => [message.id, message]));
-    const newest = !cursor && selected[0] ? await this.db.mailMessage.findFirst({ where: { id: selected[0].id, folderId: folder.id }, include: { recipients: { select: { type: true, name: true, email: true } }, attachments: { select: { filename: true, contentType: true, sizeBytes: true, disposition: true, contentId: true } } } }) : null;
+    const newest = !cursor && selected[0] ? await this.db.mailMessage.findFirst({ where: { id: selected[0].id, folderId: folder.id }, include: { recipients: { select: { type: true, name: true, email: true } }, attachments: { select: { id: true, filename: true, contentType: true, sizeBytes: true, disposition: true, contentId: true, imapPart: true } } } }) : null;
     const items = [...selected].reverse().map(position => {
       const message = byId.get(position.id);
       if (!message) return null;
       const snippet = safePreview(position.previewText, position.previewHtml);
       if (newest?.id === message.id) return { ...this.serialize(newest, query.remoteImages === 'true'), snippet };
-      return { ...message, textBody: null, htmlBody: null, hasRemoteImages: false, bodyLoaded: false, snippet, attachments: message.attachments.map(item => ({ ...item, sizeBytes: item.sizeBytes?.toString() ?? null })) };
+      return { ...message, textBody: null, htmlBody: null, hasRemoteImages: false, bodyLoaded: false, snippet, attachments: message.attachments.map(({ imapPart, ...item }) => ({ ...item, available: !!imapPart && !!item.sizeBytes && item.sizeBytes <= attachmentLimit, sizeBytes: item.sizeBytes?.toString() ?? null })) };
     }).filter(item => item !== null);
     const oldest = selected.at(-1);
     return { folder, threadKey: key, items, nextCursor: hasMore && oldest ? encodeCursor(oldest.at, oldest.id) : null };
@@ -112,13 +115,18 @@ export class WebmailMessagesController {
     const mailboxId = parse(idSchema, rawId);
     const messageId = parse(idSchema, rawMessageId);
     const query = parse(detailSchema, rawQuery);
-    const message = await this.db.mailMessage.findFirst({ where: { id: messageId, mailboxId }, include: { recipients: { select: { type: true, name: true, email: true } }, attachments: { select: { filename: true, contentType: true, sizeBytes: true, disposition: true, contentId: true } } } });
+    const message = await this.db.mailMessage.findFirst({ where: { id: messageId, mailboxId }, include: { recipients: { select: { type: true, name: true, email: true } }, attachments: { select: { id: true, filename: true, contentType: true, sizeBytes: true, disposition: true, contentId: true, imapPart: true } } } });
     if (!message) throw problem('MESSAGE_NOT_FOUND', 'Message not found for this mailbox');
     return this.serialize(message, query.remoteImages === 'true');
   }
 
-  private serialize<T extends { imapUid: bigint; sizeBytes: bigint | null; htmlBody: string | null; attachments: { sizeBytes: bigint | null }[] }>(message: T, remoteImages: boolean) {
-    const sanitized = message.htmlBody ? safeEmailHtml(message.htmlBody, remoteImages) : null;
-    return { ...message, imapUid: message.imapUid.toString(), htmlBody: sanitized?.html ?? null, hasRemoteImages: sanitized?.hasRemoteImages ?? false, bodyLoaded: true, sizeBytes: message.sizeBytes?.toString() ?? null, attachments: message.attachments.map(item => ({ ...item, sizeBytes: item.sizeBytes?.toString() ?? null })) };
+  private serialize<T extends { id: string; mailboxId: string; imapUid: bigint; sizeBytes: bigint | null; htmlBody: string | null; attachments: { id: string; contentId: string | null; contentType: string; imapPart: string | null; sizeBytes: bigint | null }[] }>(message: T, remoteImages: boolean) {
+    const cidImages: Record<string, string> = {};
+    for (const attachment of message.attachments) {
+      const cid = normalizedCid(attachment.contentId);
+      if (cid && attachment.imapPart && attachment.sizeBytes && attachment.sizeBytes <= attachmentLimit && /^image\/(png|jpeg|gif|webp)$/i.test(attachment.contentType)) cidImages[cid] = `/api/v1/mailboxes/${message.mailboxId}/messages/${message.id}/attachments/${attachment.id}?inline=1`;
+    }
+    const sanitized = message.htmlBody ? safeEmailHtml(message.htmlBody, remoteImages, cidImages) : null;
+    return { ...message, imapUid: message.imapUid.toString(), htmlBody: sanitized?.html ?? null, hasRemoteImages: sanitized?.hasRemoteImages ?? false, bodyLoaded: true, sizeBytes: message.sizeBytes?.toString() ?? null, attachments: message.attachments.map(({ imapPart, ...item }) => ({ ...item, available: !!imapPart && !!item.sizeBytes && item.sizeBytes <= attachmentLimit, sizeBytes: item.sizeBytes?.toString() ?? null })) };
   }
 }

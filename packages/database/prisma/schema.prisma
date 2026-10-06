@@ -404,6 +404,8 @@ model OutgoingMessage {
   htmlBody String?
   replyToEmail String?
   replyToName String?
+  inReplyTo String?
+  references String[] @default([])
   status OutgoingStatus @default(QUEUED)
   priority Int @default(0)
   idempotencyKey String

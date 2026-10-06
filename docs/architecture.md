@@ -8,9 +8,10 @@ Client application -> project API key -> NestJS sending API -> PostgreSQL messag
                                                                          -> configured SMTP server
 Mailpit -> local SMTP capture for tests
 IMAP server -> read-only ImapFlow worker -> PostgreSQL folders/messages/sync runs
+Browser -> authenticated action API -> shared mailbox lease -> UID-verified IMAP writes/attachment streams
 ```
 
-`apps/web` owns the admin UI and HTTP-only session cookie. `apps/api` owns human authentication, project/mailbox/API-key authorization, registry writes, sending request validation, sync enqueueing, and audits. `apps/worker` owns SMTP queue consumers, outbox reconciliation, scheduled IMAP sync, and short-lived read-only IMAP connections. `packages/database` defines business state; `packages/shared` validates requests; `packages/config` validates environment settings; `packages/security` hashes API keys and encrypts credentials; `packages/mail` contains transport helpers, MIME parsing, and safe error classification.
+`apps/web` owns the admin UI and HTTP-only session cookie. `apps/api` owns human authentication, project/mailbox/API-key authorization, registry writes, sending request validation, sync enqueueing, mail actions, attachment streaming, and audits. `apps/worker` owns SMTP queue consumers, outbox reconciliation, scheduled IMAP sync, and short-lived read-only IMAP connections. `packages/database` defines business state; `packages/shared` validates requests; `packages/config` validates environment settings; `packages/security` hashes API keys and encrypts credentials; `packages/mail` contains transport helpers, MIME parsing, mailbox leasing, response-address rules, and safe error classification.
 
 ## Sending flow
 
@@ -24,7 +25,7 @@ The sender display name/address come from the mailbox. The request cannot provid
 
 ## Mail credential boundary
 
-`MailServer` stores reusable endpoints and transport modes. `MailboxCredential` stores username and versioned AES-256-GCM encrypted password material. The Base64 master key exists only in the API/worker environment, never in PostgreSQL. The API decrypts for manual connection tests; the worker decrypts only when sending through password-authenticated SMTP. Credentials never enter BullMQ jobs or client responses. Mailbox connection checks are manual and record sanitized per-protocol outcomes. Changing credentials or server configuration increments a version so old checks no longer define current health.
+`MailServer` stores reusable endpoints and transport modes. `MailboxCredential` stores username and versioned AES-256-GCM encrypted password material. The Base64 master key exists only in the API/worker environment, never in PostgreSQL. The API decrypts for manual connection tests and short-lived IMAP actions; the worker decrypts for synchronization and password-authenticated SMTP. Credentials never enter BullMQ jobs or client responses. Mailbox connection checks are manual and record sanitized per-protocol outcomes. Changing credentials or server configuration increments a version so old checks no longer define current health.
 
 ## IMAP synchronization
 
@@ -34,6 +35,8 @@ The admin API enqueues `mail-sync` jobs containing only a mailbox ID. The worker
 
 Authenticated webmail APIs return mailbox-scoped folder and conversation data from PostgreSQL. A persistent thread key derived from References/In-Reply-To/Message-ID groups messages conservatively; 50-item keyset pages keep list payloads light, and the reader fetches bodies only when opened. The API sanitizes HTML, and the browser uses a sandboxed frame with remote images blocked by default. Admin compose writes through the existing outgoing-message/outbox model and SMTP worker. See [webmail.md](webmail.md) for navigation, rendering, and limitations.
 
+Module 6 actions take the same mailbox lease as synchronization, validate remote UIDVALIDITY and UID, and use explicit UID flags or server MOVE. Attachment parts stream through the authenticated relay with a size cap; CID images resolve only within their source message. Replies reuse the outgoing queue with stored threading headers. See [mail-actions.md](mail-actions.md) for safety and testing.
+
 ## Existing and future features
 
-Human admin routes use JWT through the web relay. The API checks users in the database and requires `SUPER_ADMIN` for registry, sync, webmail, and send-management actions. The application sending route uses a separate API-key guard. Module 1 registry and Module 2 connectivity tests remain available. IMAP mail actions, bounce handling, delivery tracking, bulk campaigns, and provider API integration are deferred.
+Human admin routes use JWT through the web relay. The API checks users in the database and requires `SUPER_ADMIN` for registry, sync, webmail, mail actions, and send-management actions. The application sending route uses a separate API-key guard. Module 1 registry and Module 2 connectivity tests remain available. Permanent deletion, bounce handling, delivery tracking, bulk campaigns, and provider API integration are deferred.

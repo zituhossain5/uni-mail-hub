@@ -58,11 +58,11 @@ export function classifySendError(error: unknown): { code: string; message: stri
   return { code: mapped.errorCode, message: mapped.message, retryable, smtpResponseCode: responseCode };
 }
 
-export async function sendSmtp(input: { endpoint: Endpoint; auth: { user: string; pass: string } | null; from: SendRecipient; to: SendRecipient[]; cc: SendRecipient[]; bcc: SendRecipient[]; replyTo?: SendRecipient | null; subject: string; text?: string | null; html?: string | null }) {
+export async function sendSmtp(input: { endpoint: Endpoint; auth: { user: string; pass: string } | null; from: SendRecipient; to: SendRecipient[]; cc: SendRecipient[]; bcc: SendRecipient[]; replyTo?: SendRecipient | null; subject: string; text?: string | null; html?: string | null; inReplyTo?: string | null; references?: string[] }) {
   const transport = createSmtpTransport(input.endpoint, input.auth);
   const format = (recipient: SendRecipient) => ({ address: recipient.email, name: recipient.name ?? '' });
   try {
-    const result = await transport.sendMail({ from: format(input.from), to: input.to.map(format), cc: input.cc.map(format), bcc: input.bcc.map(format), replyTo: input.replyTo ? format(input.replyTo) : undefined, subject: input.subject, text: input.text ?? undefined, html: input.html ?? undefined });
+    const result = await transport.sendMail({ from: format(input.from), to: input.to.map(format), cc: input.cc.map(format), bcc: input.bcc.map(format), replyTo: input.replyTo ? format(input.replyTo) : undefined, subject: input.subject, text: input.text ?? undefined, html: input.html ?? undefined, inReplyTo: input.inReplyTo ?? undefined, references: input.references?.length ? input.references : undefined });
     return { accepted: result.accepted.map(String).map(value => value.toLowerCase()), rejected: result.rejected.map(String).map(value => value.toLowerCase()), pending: result.pending?.map(String).map(value => value.toLowerCase()) ?? [], messageId: result.messageId, responseCode: Number(result.response?.match(/^([0-9]{3})/)?.[1]) || null };
   } finally { transport.close(); }
 }
@@ -70,3 +70,5 @@ export async function sendSmtp(input: { endpoint: Endpoint; auth: { user: string
 export { createSyncClient, folderSpecialUse, initialUids, advanceCursor, classifySyncError, parseSyncMessage } from './imap-sync';
 export type { SyncMessage, SyncRecipient, SyncAttachment } from './imap-sync';
 export { headerId, headerThreadKey, threadKeyFor } from './threading';
+export { withMailboxSyncLease } from './mailbox-lease';
+export { replyRecipients, responseHeaders, responseSubject, forwardedBlock } from './respond';

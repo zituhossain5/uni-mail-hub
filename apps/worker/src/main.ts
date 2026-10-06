@@ -100,7 +100,7 @@ async function processMessage(messageId: string) {
     if (server.smtpAuthMode === 'PASSWORD' && !mailbox.credential) throw { code: 'MAIL_CREDENTIAL_NOT_CONFIGURED' };
     const auth = server.smtpAuthMode === 'PASSWORD' ? { user: mailbox.credential!.username, pass: decryptSecret(mailbox.credential!, key) } : null;
     const recipients = (type: 'TO' | 'CC' | 'BCC') => message.recipients.filter(item => item.type === type).map(item => ({ email: item.email, name: item.name }));
-    const result = await sendSmtp({ endpoint: { host: server.smtpHost, port: server.smtpPort, security: server.smtpSecurity }, auth, from: { email: mailbox.email, name: mailbox.displayName }, to: recipients('TO'), cc: recipients('CC'), bcc: recipients('BCC'), replyTo: message.replyToEmail ? { email: message.replyToEmail, name: message.replyToName } : null, subject: message.subject, text: message.textBody, html: message.htmlBody });
+    const result = await sendSmtp({ endpoint: { host: server.smtpHost, port: server.smtpPort, security: server.smtpSecurity }, auth, from: { email: mailbox.email, name: mailbox.displayName }, to: recipients('TO'), cc: recipients('CC'), bcc: recipients('BCC'), replyTo: message.replyToEmail ? { email: message.replyToEmail, name: message.replyToName } : null, subject: message.subject, text: message.textBody, html: message.htmlBody, inReplyTo: message.inReplyTo, references: message.references });
     accepted = result.accepted; rejected = result.rejected; pending = result.pending; rfcMessageId = result.messageId; responseCode = result.responseCode;
     if (!accepted.length) throw { code: 'SMTP_RECIPIENT_REJECTED', responseCode: responseCode ?? 550 };
   } catch (error) {

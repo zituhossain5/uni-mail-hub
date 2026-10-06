@@ -1,4 +1,4 @@
-import { Body, CanActivate, Controller, ExecutionContext, Get, Headers, HttpCode, HttpException, Inject, Injectable, OnModuleDestroy, Param, Post, Req, UseGuards } from '@nestjs/common';
+import { Body, CanActivate, Controller, ExecutionContext, Get, Headers, HttpCode, HttpException, Inject, Injectable, OnModuleDestroy, Param, Post, Query, Req, UseGuards } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import { createHash } from 'node:crypto';
@@ -6,12 +6,18 @@ import type { Request } from 'express';
 import { Prisma } from '@uni/database';
 import { readConfig } from '@uni/config';
 import { hashApiKey } from '@uni/security';
+import { forwardedBlock, replyRecipients, responseHeaders, responseSubject } from '@uni/mail';
 import { sendMessageSchema } from '@uni/shared';
 import { z } from 'zod';
 import { AuthedRequest, Database, Public, RedisConnection, SuperAdmin, parse } from './core';
+import { safeForwardText } from './webmail-html';
 
 const config = readConfig();
 const idSchema = z.string().cuid();
+const responseKind = z.enum(['REPLY', 'REPLY_ALL', 'FORWARD']);
+const responseAddress = z.object({ email: z.string().trim().toLowerCase().email().max(320), name: z.string().trim().max(120).optional() }).strict();
+const responseInput = z.object({ fromMailboxId: idSchema, sourceMessageId: idSchema, kind: responseKind, text: z.string().max(1048576), to: z.array(responseAddress).max(50).optional(), cc: z.array(responseAddress).max(50).optional(), bcc: z.array(responseAddress).max(50).optional() }).strict();
+type SendInput = z.input<typeof sendMessageSchema>;
 type ApiPrincipal = { id: string; projectId: string; scopes: string[] };
 type ApiRequest = Request & { apiPrincipal: ApiPrincipal };
 const problem = (code: string, message: string, status = 400) => new HttpException({ code, message }, status);
@@ -112,8 +118,39 @@ export class AdminComposeController {
 
   @Post() @HttpCode(202)
   async submit(@Body() body: unknown, @Headers('idempotency-key') idempotencyKey: string | undefined, @Req() request: AuthedRequest) {
+    return this.submitPrepared(parse(sendMessageSchema, body), idempotencyKey, request);
+  }
+
+  @Get('respond/:sourceMessageId') async responseDraft(@Param('sourceMessageId') rawId: string, @Query('fromMailboxId') rawMailboxId: string, @Query('kind') rawKind: string) {
+    const mailboxId = parse(idSchema, rawMailboxId);
+    const kind = parse(responseKind, rawKind);
+    const source = await this.db.mailMessage.findFirst({ where: { id: parse(idSchema, rawId), mailboxId }, include: { recipients: true, attachments: { select: { id: true } } } });
+    const mailbox = await this.db.mailbox.findUnique({ where: { id: mailboxId }, select: { email: true } });
+    if (!source || !mailbox) throw problem('MESSAGE_NOT_FOUND', 'Source message not found in the selected mailbox', 404);
+    const recipients = kind === 'FORWARD' ? { to: [], cc: [] } : replyRecipients(source, mailbox.email, kind === 'REPLY_ALL');
+    const plain = source.textBody ?? safeForwardText(source.htmlBody);
+    const quote = plain ? `\n\nOn ${source.date?.toISOString() ?? 'an earlier date'}, ${source.fromEmail ?? 'sender'} wrote:\n${plain.slice(0, 100000).split('\n').map(line => `> ${line}`).join('\n')}` : '';
+    return { kind, to: recipients.to, cc: recipients.cc, subject: responseSubject(kind, source), text: kind === 'FORWARD' ? forwardedBlock({ ...source, textBody: plain }) : quote, attachmentCount: source.attachments.length, threadingAvailable: !!responseHeaders(source).inReplyTo };
+  }
+
+  @Post('respond') @HttpCode(202)
+  async respond(@Body() body: unknown, @Headers('idempotency-key') idempotencyKey: string | undefined, @Req() request: AuthedRequest) {
+    const input = parse(responseInput, body);
+    const source = await this.db.mailMessage.findFirst({ where: { id: input.sourceMessageId, mailboxId: input.fromMailboxId }, include: { recipients: true } });
+    const mailbox = await this.db.mailbox.findUnique({ where: { id: input.fromMailboxId }, select: { email: true } });
+    if (!source || !mailbox) throw problem('MESSAGE_NOT_FOUND', 'Source message not found in the selected mailbox', 404);
+    const derived = input.kind === 'FORWARD' ? { to: input.to ?? [], cc: input.cc ?? [] } : replyRecipients(source, mailbox.email, input.kind === 'REPLY_ALL');
+    if (!derived.to.length && !derived.cc.length) throw problem('NO_REPLY_RECIPIENT', 'No valid recipient is available for this response', 409);
+    const text = input.kind === 'FORWARD' ? `${input.text.trim()}${forwardedBlock({ ...source, textBody: source.textBody ?? safeForwardText(source.htmlBody) })}` : input.text;
+    const clean = (items: Array<{ email: string; name?: string | null }>) => items.map(item => ({ email: item.email, ...(item.name ? { name: item.name } : {}) }));
+    const payload = parse(sendMessageSchema, { fromMailboxId: input.fromMailboxId, to: clean(derived.to), cc: clean(derived.cc), bcc: input.kind === 'FORWARD' ? input.bcc ?? [] : [], subject: responseSubject(input.kind, source), text });
+    const headers = input.kind === 'FORWARD' ? null : responseHeaders(source);
+    const action = input.kind === 'FORWARD' ? 'MAIL_FORWARDED' : input.kind === 'REPLY_ALL' ? 'MAIL_REPLY_ALL_SENT' : 'MAIL_REPLY_SENT';
+    return this.submitPrepared(payload, idempotencyKey, request, headers, action);
+  }
+
+  private async submitPrepared(input: SendInput, idempotencyKey: string | undefined, request: AuthedRequest, headers: { inReplyTo: string | null; references: string[] } | null = null, auditAction = 'WEBMAIL_COMPOSE_QUEUED') {
     if (!idempotencyKey || !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) throw problem('IDEMPOTENCY_KEY_REQUIRED', 'A valid Idempotency-Key header is required');
-    const input = parse(sendMessageSchema, body);
     const to = input.to ?? []; const cc = input.cc ?? []; const bcc = input.bcc ?? [];
     if (to.length + cc.length + bcc.length > config.MAIL_MAX_RECIPIENTS) throw problem('TOO_MANY_RECIPIENTS', 'Recipient limit exceeded');
     if (Buffer.byteLength(JSON.stringify(input), 'utf8') > config.MAIL_MAX_BODY_BYTES) throw problem('MESSAGE_TOO_LARGE', 'Message body limit exceeded', 413);
@@ -122,7 +159,7 @@ export class AdminComposeController {
     if (!mailbox.isActive || mailbox.status === 'DISABLED') throw problem('MAILBOX_DISABLED', 'Sender mailbox is disabled', 409);
     if (!mailbox.mailServer || !mailbox.mailServer.smtpHost || !mailbox.mailServer.smtpPort || mailbox.mailServer.status !== 'ACTIVE') throw problem('MAILBOX_NOT_CONFIGURED', 'Sender mailbox needs an active SMTP server', 409);
     if (mailbox.mailServer.smtpAuthMode === 'PASSWORD' && !mailbox.credential) throw problem('MAIL_CREDENTIAL_NOT_CONFIGURED', 'Sender mailbox credentials are missing', 409);
-    const requestHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+    const requestHash = createHash('sha256').update(JSON.stringify(headers ? { input, headers } : input)).digest('hex');
     const identity = { createdByUserId: request.user.id, idempotencyKey };
     const existing = await this.db.outgoingMessage.findUnique({ where: { createdByUserId_idempotencyKey: identity }, select: { id: true, requestHash: true, status: true, createdAt: true } });
     if (existing) {
@@ -134,7 +171,7 @@ export class AdminComposeController {
     const recipients = [...to.map(value => ({ ...value, type: 'TO' as const })), ...cc.map(value => ({ ...value, type: 'CC' as const })), ...bcc.map(value => ({ ...value, type: 'BCC' as const }))];
     let created: { id: string; status: string; createdAt: Date; outboxEvents: { id: string }[] };
     try {
-      created = await this.db.outgoingMessage.create({ data: { projectId: mailbox.projectId, createdByUserId: request.user.id, fromMailboxId: mailbox.id, subject: input.subject, textBody: input.text, htmlBody: input.html, replyToEmail: input.replyTo?.email, replyToName: input.replyTo?.name, idempotencyKey, requestHash, recipients: { create: recipients }, outboxEvents: { create: {} } }, select: { id: true, status: true, createdAt: true, outboxEvents: { select: { id: true } } } });
+      created = await this.db.outgoingMessage.create({ data: { projectId: mailbox.projectId, createdByUserId: request.user.id, fromMailboxId: mailbox.id, subject: input.subject, textBody: input.text, htmlBody: input.html, replyToEmail: input.replyTo?.email, replyToName: input.replyTo?.name, inReplyTo: headers?.inReplyTo, references: headers?.references ?? [], idempotencyKey, requestHash, recipients: { create: recipients }, outboxEvents: { create: {} } }, select: { id: true, status: true, createdAt: true, outboxEvents: { select: { id: true } } } });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         const raced = await this.db.outgoingMessage.findUnique({ where: { createdByUserId_idempotencyKey: identity }, select: { id: true, requestHash: true, status: true, createdAt: true } });
@@ -142,7 +179,7 @@ export class AdminComposeController {
       }
       throw error;
     }
-    await this.db.auditLog.create({ data: { userId: request.user.id, action: 'WEBMAIL_COMPOSE_QUEUED', entityType: 'OutgoingMessage', entityId: created.id, ipAddress: request.ip } });
+    await this.db.auditLog.create({ data: { userId: request.user.id, action: auditAction, entityType: 'OutgoingMessage', entityId: created.id, ipAddress: request.ip } });
     await this.publish(created.outboxEvents[0]!.id, created.id);
     return { id: created.id, status: created.status, createdAt: created.createdAt };
   }
