@@ -15,6 +15,7 @@
     "test:module4:smoke": "dotenv -e .env -- node scripts/module4-smoke.mjs",
     "test:module5:smoke": "dotenv -e .env -- node scripts/module5-smoke.mjs",
     "test:module6:smoke": "dotenv -e .env -- node scripts/module5-smoke.mjs",
+    "test:module7:smoke": "dotenv -e .env -- node scripts/module7-smoke.mjs",
     "test:smoke": "dotenv -e .env -- node scripts/smoke.mjs",
     "test:module2": "dotenv -e .env -- node scripts/module2-smoke.mjs",
     "test:module3": "dotenv -e .env -- node scripts/module3-smoke.mjs",

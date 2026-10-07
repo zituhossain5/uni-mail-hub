@@ -1,6 +1,8 @@
-# Webmail (Module 5)
+# Webmail (Modules 5–7)
 
 Webmail reads synchronized Module 4 data for one selected mailbox at a time. The global Inbox, Sent, and Drafts links resolve that mailbox's IMAP `specialUse` folder; Spam, Trash, Archive, and custom folders appear in the webmail folder rail. The mailbox selector keeps the choice in the URL. If a special folder is absent, the page says so instead of inventing one. The reader has its own route on narrow screens and shares the list pane on wide screens.
+
+Module 7 adds Unified Inbox, Search, Unread, and Flagged views across selected mailboxes and projects. Search and its filter panel include Attachments, folder, sender, recipient, and date filters. Result rows show their mailbox and project and open the existing reader/action flow. The URL retains filters when returning from a result. See [search-unified-inbox.md](search-unified-inbox.md) for the API, authorization boundary, shortcuts, performance behavior, and limits.
 
 ## Threads and pagination
 
@@ -29,4 +31,4 @@ Admin compose uses the selected managed mailbox, the existing validated sending 
 5. Press **Sync now** in webmail and verify the status updates. Compose a message from the selected mailbox to a disposable address, then follow its actual status in **Outgoing Mail**. Do not expect an IMAP Sent copy unless the mail server creates one.
 6. Run `pnpm test`, `pnpm test:module5:smoke`, and the Module 1–4 smoke checks. The Module 5 smoke fixture uses disposable rows and local Mailpit, then cleans up.
 
-Explicit IMAP flag and MOVE actions and bounded attachment retrieval are covered in [mail-actions.md](mail-actions.md). Permanent deletion, live IDLE updates, local drafts, full-text search, and server-side Sent-copy creation remain future work.
+Explicit IMAP flag and MOVE actions and bounded attachment retrieval are covered in [mail-actions.md](mail-actions.md). Permanent deletion, live IDLE updates, local drafts, and server-side Sent-copy creation remain future work.

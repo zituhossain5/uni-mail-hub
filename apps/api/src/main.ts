@@ -17,6 +17,7 @@ import { AdminComposeController, AdminMessagesController, ApiKeyGuard, ClientMes
 import { ImapSyncController, ImapSyncQueue } from './imap-sync';
 import { WebmailContextController, WebmailMessagesController } from './webmail';
 import { MailActionsController } from './mail-actions';
+import { MailSearchController } from './mail-search';
 
 const config = readConfig();
 
@@ -35,7 +36,7 @@ class HealthController {
 
 @Module({
   imports: [JwtModule.register({ secret: config.JWT_SECRET }), ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
-  controllers: [HealthController, AuthController, DashboardController, ProjectsController, DomainsController, MailboxesController, MailServersController, MailConnectivityController, ImapSyncController, WebmailContextController, WebmailMessagesController, MailActionsController, ApiKeysController, ClientMessagesController, AdminComposeController, AdminMessagesController],
+  controllers: [HealthController, AuthController, DashboardController, ProjectsController, DomainsController, MailboxesController, MailServersController, MailConnectivityController, ImapSyncController, WebmailContextController, WebmailMessagesController, MailSearchController, MailActionsController, ApiKeysController, ClientMessagesController, AdminComposeController, AdminMessagesController],
   providers: [Database, RedisConnection, MailQueue, ImapSyncQueue, ApiKeyGuard, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_GUARD, useClass: AuthGuard }, { provide: APP_FILTER, useClass: ApiExceptionFilter }],
 })
 class AppModule {}
