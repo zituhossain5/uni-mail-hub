@@ -2,8 +2,9 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import 'reflect-metadata';
 import { decodeEncryptionKey, decryptSecret } from '../packages/security/src/index';
-import { classifyCpanelError, normalizeEmail, parseDomains, parseForwarders, parseMailboxes, parseUapiResponse, validateCpanelHost } from '../packages/mail/src/cpanel';
-import { collectCpanelDiscovery, missingEmails, reconcileMailboxState } from '../apps/worker/src/cpanel-discovery';
+import { classifyCpanelError, normalizeEmail, parseDomains, parseForwarders, parseMailboxes, parseUapiResponse, pinnedLookupAnswer, validateCpanelHost } from '../packages/mail/src/cpanel';
+import { collectCpanelDiscovery, discoveryRunStatus, missingEmails, reconcileMailboxState } from '../apps/worker/src/cpanel-discovery';
+import { connectionFeedback } from '../apps/web/src/lib/cpanel-connection';
 import { CpanelController } from '../apps/api/dist/cpanel.js';
 import { AuthGuard } from '../apps/api/dist/core.js';
 
@@ -13,6 +14,7 @@ test('mocked UAPI responses parse domains, mailbox quotas, suspension, and forwa
   const envelope = (data: unknown) => JSON.stringify({ result: { status: 1, data, errors: null } });
   const domains = parseDomains(parseUapiResponse(envelope({ main_domain: 'Example.test', addon_domains: ['other.test'], sub_domains: ['mail.example.test'], parked_domains: ['other.test'] })));
   assert.deepEqual(domains, ['example.test', 'other.test', 'mail.example.test']);
+  assert.deepEqual(parseDomains(parseUapiResponse(JSON.stringify({ status: 1, data: { main_domain: 'example.test' }, errors: null }))), ['example.test']);
   const mailboxes = parseMailboxes(parseUapiResponse(envelope([
     { email: 'A@example.test', _diskused: '83886080', _diskquota: '104857600', diskquota: 100, suspended_login: 0 },
     { email: 'b@example.test', _diskused: '500', _diskquota: 0, diskquota: 'unlimited', suspended_incoming: 1 },
@@ -33,6 +35,15 @@ test('UAPI errors are normalized and optional forwarder failure leaves mailbox d
   assert.equal(collected.mailboxes?.[0]?.email, 'x@example.test');
   assert.equal(collected.forwardersByDomain.size, 0);
   assert.equal(collected.failures.length, 1);
+  assert.equal(discoveryRunStatus(collected.domains, collected.mailboxes, collected.failures.length), 'PARTIAL');
+});
+
+test('DNS pinning satisfies Node lookup all mode, and UI uses error feedback on failed tests', () => {
+  const resolved = { address: '203.0.113.7', family: 4 as const };
+  assert.deepEqual(pinnedLookupAnswer(resolved, true), [resolved]);
+  assert.equal(pinnedLookupAnswer(resolved, false), resolved.address);
+  assert.deepEqual(connectionFeedback({ status: 'CONNECTED', errorCode: null, message: 'Connected.' }), { notice: 'cPanel connection succeeded.', error: '' });
+  assert.deepEqual(connectionFeedback({ status: 'CONNECTION_FAILED', errorCode: 'CPANEL_CONNECTION_FAILED', message: 'Could not connect to cPanel.' }), { notice: '', error: 'CPANEL_CONNECTION_FAILED: Could not connect to cPanel.' });
 });
 
 test('host validation blocks URL injection and private addresses but permits public VPS IPv4', () => {

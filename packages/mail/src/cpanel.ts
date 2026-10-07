@@ -3,6 +3,7 @@ import { request } from 'node:https';
 import { isIP } from 'node:net';
 
 export type CpanelEndpoint = { host: string; port: number; username: string; apiToken: string };
+export type CpanelDiagnostic = { operation: 'list_domains' | 'list_pops_with_disk' | 'list_forwarders'; stage: 'DNS' | 'PINNING' | 'TCP' | 'TLS' | 'HTTP' | 'UAPI'; status: 'STARTED' | 'SUCCESS' | 'FAILED'; code?: string };
 export type DiscoveredMailbox = { email: string; domain: string; usedBytes: bigint | null; quotaBytes: bigint | null; unlimitedQuota: boolean; suspended: boolean | null };
 export type DiscoveredForwarder = { domain: string; source: string; destination: string };
 export class CpanelError extends Error {
@@ -39,8 +40,11 @@ export async function resolveCpanelHost(host: string): Promise<{ address: string
     return { address: addresses[0]!.address, family: addresses[0]!.family as 4 | 6 };
   } catch (error) {
     if (error instanceof CpanelError) throw error;
-    throw new CpanelError('CPANEL_CONNECTION_FAILED', 'cPanel host could not be resolved.');
+    throw new CpanelError('CPANEL_DNS_FAILED', 'cPanel host could not be resolved.');
   } finally { if (timer) clearTimeout(timer); }
+}
+export function pinnedLookupAnswer(resolved: { address: string; family: 4 | 6 }, all: boolean) {
+  return all ? [resolved] : resolved.address;
 }
 type Data = Record<string, unknown>;
 function record(value: unknown): Data { return value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {}; }
@@ -49,7 +53,8 @@ function bytes(value: unknown): bigint | null { if (typeof value !== 'string' &&
 export function parseUapiResponse(payload: string): unknown {
   let envelope: Data;
   try { envelope = record(JSON.parse(payload)); } catch { throw new CpanelError('CPANEL_API_ERROR', 'cPanel returned an invalid response.'); }
-  const result = record(envelope.result);
+  // cPanel can return the UAPI result directly or inside a `result` envelope.
+  const result = envelope.result === undefined ? envelope : record(envelope.result);
   if (result.status !== 1 && result.status !== true) {
     const errors = Array.isArray(result.errors) ? result.errors.map(String).join(' ').toLowerCase() : '';
     const code = errors.includes('permission') || errors.includes('feature') ? 'CPANEL_PERMISSION_DENIED' : errors.includes('auth') || errors.includes('token') ? 'CPANEL_AUTH_FAILED' : 'CPANEL_API_ERROR';
@@ -92,24 +97,40 @@ export function classifyCpanelError(error: unknown): CpanelError {
   const item = error as { code?: string; message?: string };
   const code = String(item?.code ?? '').toUpperCase();
   const message = String(item?.message ?? '').toLowerCase();
+  if (code === 'ERR_INVALID_IP_ADDRESS') return new CpanelError('CPANEL_DNS_PINNING_FAILED', 'cPanel DNS pinning failed.');
+  if (['ENOTFOUND', 'EAI_AGAIN'].includes(code)) return new CpanelError('CPANEL_DNS_FAILED', 'cPanel host could not be resolved.');
   if (['ETIMEDOUT', 'ESOCKETTIMEDOUT'].includes(code) || message.includes('timeout')) return new CpanelError('CPANEL_TIMEOUT', 'cPanel request timed out.');
   if (code.includes('CERT') || code.includes('TLS') || code.includes('SSL') || message.includes('certificate')) return new CpanelError('CPANEL_TLS_FAILED', 'cPanel TLS validation failed.');
   return new CpanelError('CPANEL_CONNECTION_FAILED', 'Could not connect to cPanel.');
 }
 export class CpanelClient {
   private readonly host: string;
-  constructor(private readonly endpoint: CpanelEndpoint) {
+  constructor(private readonly endpoint: CpanelEndpoint, private readonly diagnostic?: (event: CpanelDiagnostic) => void) {
     this.host = validateCpanelHost(endpoint.host);
     if (endpoint.port !== 2083 || !/^[a-z0-9_-]{1,32}$/.test(endpoint.username) || !endpoint.apiToken) throw new CpanelError('CPANEL_INVALID_CONFIG', 'Invalid cPanel connection settings.');
   }
+  private emit(event: CpanelDiagnostic) { try { this.diagnostic?.(event); } catch { /* Logging must not affect the request. */ } }
   private async call(module: 'DomainInfo' | 'Email', fn: 'list_domains' | 'list_pops_with_disk' | 'list_forwarders', params?: Record<string, string>): Promise<unknown> {
-    const resolved = await resolveCpanelHost(this.host);
+    this.emit({ operation: fn, stage: 'DNS', status: 'STARTED' });
+    let resolved: Awaited<ReturnType<typeof resolveCpanelHost>>;
+    try { resolved = await resolveCpanelHost(this.host); this.emit({ operation: fn, stage: 'DNS', status: 'SUCCESS' }); }
+    catch (error) { const failure = classifyCpanelError(error); this.emit({ operation: fn, stage: 'DNS', status: 'FAILED', code: failure.code }); throw failure; }
     const query = new URLSearchParams(params).toString();
     const path = `/execute/${module}/${fn}${query ? `?${query}` : ''}`;
     const payload = await new Promise<string>((resolve, reject) => {
+      let tcpConnected = false;
+      let tlsConnected = false;
+      this.emit({ operation: fn, stage: 'PINNING', status: 'STARTED' });
       const req = request({ hostname: this.host, port: 2083, path, method: 'GET', servername: this.host, agent: false,
-        lookup: (_host, _opts, callback) => callback(null, resolved.address, resolved.family),
-        headers: { Authorization: `cpanel ${this.endpoint.username}:${this.endpoint.apiToken}`, Accept: 'application/json' }, timeout: 10000 }, response => {
+        lookup: (_host, options, callback) => {
+          // Node's family auto-selection asks for all addresses. Its callback must
+          // receive an array in that case, even when only one validated IP is pinned.
+          callback(null, pinnedLookupAnswer(resolved, Boolean(options.all)), options.all ? undefined : resolved.family);
+          this.emit({ operation: fn, stage: 'PINNING', status: 'SUCCESS' });
+        },
+        headers: { Host: this.host, Authorization: `cpanel ${this.endpoint.username}:${this.endpoint.apiToken}`, Accept: 'application/json' }, timeout: 10000 }, response => {
+        if (response.statusCode === 200) this.emit({ operation: fn, stage: 'HTTP', status: 'SUCCESS' });
+        else this.emit({ operation: fn, stage: 'HTTP', status: 'FAILED', code: response.statusCode === 401 || response.statusCode === 403 ? 'CPANEL_AUTH_FAILED' : 'CPANEL_API_ERROR' });
         if (response.statusCode === 401 || response.statusCode === 403) { response.resume(); reject(new CpanelError('CPANEL_AUTH_FAILED', 'cPanel rejected the API token.')); return; }
         if (response.statusCode !== 200) { response.resume(); reject(new CpanelError('CPANEL_API_ERROR', 'cPanel API request failed.')); return; }
         let body = '';
@@ -117,30 +138,46 @@ export class CpanelClient {
         response.on('data', chunk => { body += chunk; if (body.length > 2_000_000) req.destroy(new CpanelError('CPANEL_API_ERROR', 'cPanel response exceeded the size limit.')); });
         response.on('end', () => resolve(body)); response.on('error', reject);
       });
+      req.on('socket', socket => {
+        socket.on('connect', () => { tcpConnected = true; this.emit({ operation: fn, stage: 'TCP', status: 'SUCCESS' }); });
+        socket.on('secureConnect', () => { tlsConnected = true; this.emit({ operation: fn, stage: 'TLS', status: 'SUCCESS' }); });
+      });
       req.on('timeout', () => req.destroy(new CpanelError('CPANEL_TIMEOUT', 'cPanel request timed out.')));
-      req.on('error', reject); req.end();
+      req.on('error', error => {
+        const failure = classifyCpanelError(error);
+        const stage = failure.code === 'CPANEL_DNS_PINNING_FAILED' ? 'PINNING' : !tcpConnected ? 'TCP' : !tlsConnected ? 'TLS' : 'HTTP';
+        this.emit({ operation: fn, stage, status: 'FAILED', code: failure.code });
+        reject(failure);
+      });
+      req.end();
     }).catch(error => { throw classifyCpanelError(error); });
-    return parseUapiResponse(payload);
+    try { return parseUapiResponse(payload); }
+    catch (error) { const failure = classifyCpanelError(error); this.emit({ operation: fn, stage: 'UAPI', status: 'FAILED', code: failure.code }); throw failure; }
   }
   async testConnection() { await this.listDomains(); return { status: 'CONNECTED' as const }; }
   async listDomains() {
     const data = await this.call('DomainInfo', 'list_domains');
     const domains = parseDomains(data);
-    if (!domains.length) throw new CpanelError('CPANEL_API_ERROR', 'cPanel returned no readable domains.');
+    if (!domains.length) { this.emit({ operation: 'list_domains', stage: 'UAPI', status: 'FAILED', code: 'CPANEL_API_ERROR' }); throw new CpanelError('CPANEL_API_ERROR', 'cPanel returned no readable domains.'); }
+    this.emit({ operation: 'list_domains', stage: 'UAPI', status: 'SUCCESS' });
     return domains;
   }
   async listMailboxes() {
     const data = await this.call('Email', 'list_pops_with_disk', { get_restrictions: '1' });
-    if (!Array.isArray(data)) throw new CpanelError('CPANEL_API_ERROR', 'cPanel returned an invalid mailbox list.');
+    if (!Array.isArray(data)) { this.emit({ operation: 'list_pops_with_disk', stage: 'UAPI', status: 'FAILED', code: 'CPANEL_API_ERROR' }); throw new CpanelError('CPANEL_API_ERROR', 'cPanel returned an invalid mailbox list.'); }
     if (data.some(item => {
       const row = record(item);
       return String(row.email ?? '').toLowerCase() !== 'main account' && !normalizeEmail(row.email ?? row.login);
-    })) throw new CpanelError('CPANEL_API_ERROR', 'cPanel returned an unrecognized mailbox record.');
-    return parseMailboxes(data);
+    })) { this.emit({ operation: 'list_pops_with_disk', stage: 'UAPI', status: 'FAILED', code: 'CPANEL_API_ERROR' }); throw new CpanelError('CPANEL_API_ERROR', 'cPanel returned an unrecognized mailbox record.'); }
+    const mailboxes = parseMailboxes(data);
+    this.emit({ operation: 'list_pops_with_disk', stage: 'UAPI', status: 'SUCCESS' });
+    return mailboxes;
   }
   async listForwarders(domain: string) {
     const data = await this.call('Email', 'list_forwarders', { domain });
-    if (!Array.isArray(data)) throw new CpanelError('CPANEL_API_ERROR', 'cPanel returned an invalid forwarder list.');
-    return parseForwarders(data, domain);
+    if (!Array.isArray(data)) { this.emit({ operation: 'list_forwarders', stage: 'UAPI', status: 'FAILED', code: 'CPANEL_API_ERROR' }); throw new CpanelError('CPANEL_API_ERROR', 'cPanel returned an invalid forwarder list.'); }
+    const forwarders = parseForwarders(data, domain);
+    this.emit({ operation: 'list_forwarders', stage: 'UAPI', status: 'SUCCESS' });
+    return forwarders;
   }
 }

@@ -10,6 +10,9 @@ export function missingEmails(previous: string[], current: string[]): string[] {
   const seen = new Set(current.map(value => value.toLowerCase()));
   return previous.filter(value => !seen.has(value.toLowerCase()));
 }
+export function discoveryRunStatus(domains: string[] | null, mailboxes: DiscoveredMailbox[] | null, failureCount: number): 'SUCCESS' | 'PARTIAL' | 'FAILED' {
+  return failureCount ? domains !== null || mailboxes !== null ? 'PARTIAL' : 'FAILED' : 'SUCCESS';
+}
 export async function collectCpanelDiscovery(client: Pick<CpanelClient, 'listDomains' | 'listMailboxes' | 'listForwarders'>): Promise<{ domains: string[] | null; mailboxes: DiscoveredMailbox[] | null; forwardersByDomain: Map<string, DiscoveredForwarder[]>; failures: CpanelError[] }> {
   const [domainResult, mailboxResult] = await Promise.allSettled([client.listDomains(), client.listMailboxes()]);
   const domains = domainResult.status === 'fulfilled' ? domainResult.value : null;
@@ -38,7 +41,7 @@ export async function processCpanelDiscovery(db: PrismaClient, key: Buffer, log:
   let mailboxes: DiscoveredMailbox[] | null = null;
   let forwardersFound = 0;
   try {
-    const client = new CpanelClient({ host: account.host, port: account.port, username: account.username, apiToken: decryptSecret({ encryptedPassword: account.encryptedApiToken, encryptionIv: account.encryptionIv, encryptionAuthTag: account.encryptionAuthTag, encryptionVersion: account.encryptionVersion }, key) });
+    const client = new CpanelClient({ host: account.host, port: account.port, username: account.username, apiToken: decryptSecret({ encryptedPassword: account.encryptedApiToken, encryptionIv: account.encryptionIv, encryptionAuthTag: account.encryptionAuthTag, encryptionVersion: account.encryptionVersion }, key) }, event => log.info({ accountId: account.id, runId, ...event }, 'cPanel discovery connection stage'));
     const collected = await collectCpanelDiscovery(client);
     domains = collected.domains;
     mailboxes = collected.mailboxes;
@@ -90,7 +93,7 @@ export async function processCpanelDiscovery(db: PrismaClient, key: Buffer, log:
         }
       });
     }
-    const status = failures.length ? domains || mailboxes ? 'PARTIAL' : 'FAILED' : 'SUCCESS';
+    const status = discoveryRunStatus(domains, mailboxes, failures.length);
     const primary = failures[0];
     await db.$transaction(async tx => {
       await tx.cpanelDiscoveryRun.update({ where: { id: runId }, data: { status, completedAt: new Date(), domainsFound: domains?.length ?? 0, mailboxesFound: mailboxes?.length ?? 0, forwardersFound, newItems, missingItems, errorCode: primary?.code ?? null, errorMessage: primary?.message ?? null } });

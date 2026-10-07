@@ -1,11 +1,11 @@
-import { Body, Controller, Delete, Get, HttpException, Inject, Injectable, OnModuleDestroy, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpException, Inject, Injectable, OnModuleDestroy, Param, Patch, Post, Req } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { Prisma } from '@uni/database';
 import { CpanelClient, classifyCpanelError, normalizeEmail, validateCpanelHost } from '@uni/mail';
 import { decodeEncryptionKey, decryptSecret, encryptSecret } from '@uni/security';
 import Redis from 'ioredis';
 import { z } from 'zod';
-import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { AuthedRequest, Database, SuperAdmin, parse, requestLogger } from './core';
 
 const id = z.string().cuid();
 const accountFields = z.object({ name: z.string().trim().min(1).max(120), host: z.string().trim().min(1).max(253), port: z.literal(2083), username: z.string().regex(/^[a-z0-9_-]{1,32}$/), status: z.enum(['ACTIVE', 'DISABLED']) }).strict();
@@ -33,7 +33,7 @@ export class CpanelController {
     return item;
   }
   private client(account: Awaited<ReturnType<CpanelController['account']>>) {
-    try { return new CpanelClient({ host: account.host, port: account.port, username: account.username, apiToken: decryptSecret({ encryptedPassword: account.encryptedApiToken, encryptionIv: account.encryptionIv, encryptionAuthTag: account.encryptionAuthTag, encryptionVersion: account.encryptionVersion }, key) }); }
+    try { return new CpanelClient({ host: account.host, port: account.port, username: account.username, apiToken: decryptSecret({ encryptedPassword: account.encryptedApiToken, encryptionIv: account.encryptionIv, encryptionAuthTag: account.encryptionAuthTag, encryptionVersion: account.encryptionVersion }, key) }, event => requestLogger.info({ accountId: account.id, ...event }, 'cPanel connection stage')); }
     catch { throw new HttpException({ code: 'CPANEL_CREDENTIAL_UNAVAILABLE', message: 'Stored cPanel token could not be decrypted.' }, 409); }
   }
   @Get() list() { return this.db.cpanelAccount.findMany({ select: { ...safeAccount, _count: { select: { domains: true, mailboxes: true, forwarders: true } } }, orderBy: { createdAt: 'desc' } }); }
@@ -85,7 +85,9 @@ export class CpanelController {
     });
     return { removed: true };
   }
-  @Post(':id/test-connection') async testConnection(@Param('id') rawId: string, @Req() request: AuthedRequest) {
+  @Post(':id/test-connection')
+  @HttpCode(200)
+  async testConnection(@Param('id') rawId: string, @Req() request: AuthedRequest) {
     const account = await this.account(rawId);
     const started = Date.now();
     let status: 'CONNECTED' | 'AUTH_FAILED' | 'TLS_FAILED' | 'TIMEOUT' | 'CONNECTION_FAILED' = 'CONNECTED';
