@@ -2,13 +2,13 @@
 import { usePathname, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { Activity, ChevronDown, CodeXml, FileText, FolderKanban, Globe2, Inbox, LayoutDashboard, LogOut, Mail, MailSearch, Menu, MoreHorizontal, PanelLeftClose, Paperclip, Send, Settings2, ShieldCheck, SlidersHorizontal, Star, X } from 'lucide-react';
+import { Activity, ChevronDown, CodeXml, FileText, FolderKanban, Globe2, Inbox, LayoutDashboard, LogOut, Mail, MailSearch, Menu, MoreHorizontal, PanelLeftClose, Paperclip, Send, Settings2, ShieldCheck, SlidersHorizontal, Star, X, ServerCog } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
 const primaryMail: [string, string, LucideIcon][] = [['Dashboard','/dashboard',LayoutDashboard],['Inbox','/inbox',Inbox],['Sent','/sent',Send],['Drafts','/drafts',FileText],['Outgoing Mail','/outgoing-mail',Send]];
 const secondaryMail: [string, string, LucideIcon][] = [['Unified Inbox','/unified',Inbox],['Search','/search',MailSearch],['Unread','/unread',Mail],['Flagged','/flagged',Star],['Attachments','/attachments',Paperclip]];
 const manage: [string, string, LucideIcon][] = [['Projects','/projects',FolderKanban],['Domains','/domains',Globe2],['Mailboxes','/mailboxes',Mail],['API Keys','/api-keys',CodeXml],['Templates','/templates',SlidersHorizontal]];
-const system: [string, string, LucideIcon][] = [['Mail Servers','/mail-servers',Settings2],['Monitoring','/monitoring',Activity],['Logs','/logs',ShieldCheck],['Settings','/settings',Settings2]];
+const system: [string, string, LucideIcon][] = [['Mail Servers','/mail-servers',Settings2],['cPanel Accounts','/cpanel-accounts',ServerCog],['Monitoring','/monitoring',Activity],['Logs','/logs',ShieldCheck],['Settings','/settings',Settings2]];
 const all = [...primaryMail, ...secondaryMail, ...manage, ...system];
 function isActive(path: string, href: string) { return path === href || path.startsWith(`${href}/`); }
 function NavGroup({ title, items, path, close }: { title: string; items: [string,string,LucideIcon][]; path: string; close: () => void }) {

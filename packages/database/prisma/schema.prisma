@@ -105,6 +105,7 @@ model Domain {
   createdAt DateTime     @default(now())
   updatedAt DateTime     @updatedAt
   mailboxes Mailbox[]
+  cpanelDiscoveries CpanelDiscoveredDomain[]
 
   @@index([projectId])
 }
@@ -153,9 +154,127 @@ model Mailbox {
   folders MailFolder[]
   syncedMessages MailMessage[]
   syncRuns MailSyncRun[]
+  cpanelDiscoveries CpanelDiscoveredMailbox[]
 
   @@index([projectId])
   @@index([domainId])
+}
+
+enum CpanelAccountStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum CpanelConnectionStatus {
+  UNTESTED
+  CONNECTED
+  AUTH_FAILED
+  TLS_FAILED
+  TIMEOUT
+  CONNECTION_FAILED
+}
+
+enum CpanelDiscoveryState {
+  DISCOVERED
+  MANAGED
+  IGNORED
+  MISSING
+}
+
+enum CpanelDiscoveryRunStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+model CpanelAccount {
+  id String @id @default(cuid())
+  name String
+  host String
+  port Int @default(2083)
+  username String
+  encryptedApiToken String
+  encryptionIv String
+  encryptionAuthTag String
+  encryptionVersion Int @default(1)
+  status CpanelAccountStatus @default(ACTIVE)
+  connectionStatus CpanelConnectionStatus @default(UNTESTED)
+  lastConnectedAt DateTime?
+  lastDiscoveryAt DateTime?
+  lastError String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  domains CpanelDiscoveredDomain[]
+  mailboxes CpanelDiscoveredMailbox[]
+  forwarders CpanelDiscoveredForwarder[]
+  runs CpanelDiscoveryRun[]
+}
+
+model CpanelDiscoveredDomain {
+  id String @id @default(cuid())
+  accountId String
+  account CpanelAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  domain String
+  state CpanelDiscoveryState @default(DISCOVERED)
+  firstSeenAt DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  managedDomainId String?
+  managedDomain Domain? @relation(fields: [managedDomainId], references: [id], onDelete: SetNull)
+  @@unique([accountId, domain])
+  @@index([state])
+}
+
+model CpanelDiscoveredMailbox {
+  id String @id @default(cuid())
+  accountId String
+  account CpanelAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  email String
+  domain String
+  state CpanelDiscoveryState @default(DISCOVERED)
+  managedMailboxId String?
+  managedMailbox Mailbox? @relation(fields: [managedMailboxId], references: [id], onDelete: SetNull)
+  usedBytes BigInt?
+  quotaBytes BigInt?
+  unlimitedQuota Boolean @default(false)
+  suspended Boolean?
+  firstSeenAt DateTime @default(now())
+  lastSeenAt DateTime @default(now())
+  @@unique([accountId, email])
+  @@index([state])
+  @@index([managedMailboxId])
+}
+
+model CpanelDiscoveredForwarder {
+  id String @id @default(cuid())
+  accountId String
+  account CpanelAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  domain String
+  source String
+  destination String
+  lastSeenAt DateTime @default(now())
+  @@unique([accountId, domain, source, destination])
+}
+
+model CpanelDiscoveryRun {
+  id String @id @default(cuid())
+  accountId String
+  account CpanelAccount @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  status CpanelDiscoveryRunStatus @default(QUEUED)
+  startedAt DateTime?
+  completedAt DateTime?
+  domainsFound Int @default(0)
+  mailboxesFound Int @default(0)
+  forwardersFound Int @default(0)
+  newItems Int @default(0)
+  missingItems Int @default(0)
+  errorCode String?
+  errorMessage String?
+  requestedByUserId String?
+  createdAt DateTime @default(now())
+  @@index([accountId, createdAt])
+  @@index([status, createdAt])
 }
 
 enum MailFolderSpecialUse {

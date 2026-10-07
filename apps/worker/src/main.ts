@@ -8,14 +8,16 @@ import { classifySendError, sendSmtp } from '@uni/mail';
 import { queueNames } from '@uni/shared';
 import { processMailboxSync } from './imap-sync';
 import { withMailboxSyncLease } from './sync-lease';
+import { processCpanelDiscovery } from './cpanel-discovery';
 
 const config = readConfig();
 const key = decodeEncryptionKey(config.MAIL_CREDENTIAL_ENCRYPTION_KEY);
-const log = pino({ name: 'uni-mail-worker', redact: ['password', 'rawKey', 'authorization', 'credential'] });
+const log = pino({ name: 'uni-mail-worker', redact: ['password', 'rawKey', 'authorization', 'headers.authorization', 'credential', 'apiToken', 'encryptedApiToken'] });
 const db = new PrismaClient();
 const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null, lazyConnect: true });
 const queue = new Queue('mail-send', { connection });
 const syncQueue = new Queue('mail-sync', { connection });
+const cpanelQueue = new Queue('cpanel-discovery', { connection });
 const workers: Worker[] = [];
 let timer: NodeJS.Timeout | undefined;
 let syncTimer: NodeJS.Timeout | undefined;
@@ -137,7 +139,7 @@ async function shutdown() {
   if (syncTimer) clearInterval(syncTimer);
   if (syncScheduleTask) await syncScheduleTask;
   await Promise.all(workers.map(worker => worker.close()));
-  await queue.close(); await syncQueue.close(); await connection.quit(); await db.$disconnect();
+  await queue.close(); await syncQueue.close(); await cpanelQueue.close(); await connection.quit(); await db.$disconnect();
   log.info('worker stopped'); process.exit(0);
 }
 
@@ -147,6 +149,7 @@ async function main() {
     const worker = new Worker(name, async job => {
       if (name === 'mail-send') return processMessage(String(job.data.messageId));
       if (name === 'mail-sync') return processSyncJob(String(job.data.mailboxId));
+      if (name === 'cpanel-discovery') return processCpanelDiscovery(db, key, log, String(job.data.runId));
       throw new Error(`Processor for ${job.queueName} is not implemented`);
     }, { connection, concurrency: name === 'mail-send' ? config.MAIL_SEND_WORKER_CONCURRENCY : name === 'mail-sync' ? config.MAIL_SYNC_WORKER_CONCURRENCY : 1 });
     worker.on('failed', (job, error) => log.error({ queue: name, jobId: job?.id, errorType: error.name }, 'job failed'));
@@ -154,6 +157,8 @@ async function main() {
     workers.push(worker);
   }
   await recoverStale(); await dispatchOutbox();
+  const interrupted = await db.cpanelDiscoveryRun.findMany({ where: { status: 'RUNNING' }, select: { id: true }, take: 100 });
+  for (const run of interrupted) await db.cpanelDiscoveryRun.update({ where: { id: run.id }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'CPANEL_DISCOVERY_INTERRUPTED', errorMessage: 'Discovery was interrupted; run it again.' } });
   await recoverSyncRuns();
   await triggerSyncSchedule();
   timer = setInterval(() => { void recoverStale().then(dispatchOutbox).catch(error => log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'reconciliation deferred')); }, 5000);

@@ -1,5 +1,6 @@
 import { ImapFlow } from 'imapflow';
 import nodemailer from 'nodemailer';
+export * from './cpanel';
 
 export type Protocol = 'IMAP' | 'SMTP';
 export type Security = 'NONE' | 'STARTTLS' | 'TLS';

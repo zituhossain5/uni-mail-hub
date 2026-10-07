@@ -6,6 +6,7 @@ import { ApiKeys } from '@/components/api-keys';
 import { OutgoingMail } from '@/components/outgoing-mail';
 import { Webmail } from '@/components/webmail';
 import { MailExplorer } from '@/components/mail-explorer';
+import { CpanelAccounts } from '@/components/cpanel-accounts';
 import { Suspense } from 'react';
 
 export default async function SectionPage({ params, searchParams }: { params: Promise<{ section: string }>; searchParams: Promise<{ mailbox?: string }> }) {
@@ -13,6 +14,7 @@ export default async function SectionPage({ params, searchParams }: { params: Pr
   const { mailbox } = await searchParams;
   if (section === 'projects' || section === 'domains' || section === 'mailboxes') return <Registry kind={section}/>;
   if (section === 'mail-servers') return <MailServers/>;
+  if (section === 'cpanel-accounts') return <CpanelAccounts/>;
   if (section === 'api-keys') return <ApiKeys/>;
   if (section === 'outgoing-mail') return <OutgoingMail/>;
   if (['unified', 'search', 'unread', 'flagged', 'attachments'].includes(section)) return <Suspense fallback={<div className="webmail-skeleton" role="status">Loading mail…</div>}><MailExplorer view={section as 'unified' | 'search' | 'unread' | 'flagged' | 'attachments'}/></Suspense>;

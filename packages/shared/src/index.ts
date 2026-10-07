@@ -42,7 +42,7 @@ export const mailboxSchema = z.object({
   isActive: z.boolean().optional(),
 });
 export const loginSchema = z.object({ email: z.string().email(), password: z.string().min(1) });
-export const queueNames = ['mail-send', 'mail-sync', 'mail-health', 'mail-webhook'] as const;
+export const queueNames = ['mail-send', 'mail-sync', 'mail-health', 'mail-webhook', 'cpanel-discovery'] as const;
 const address = z.object({ email: z.string().trim().toLowerCase().email().max(320), name: z.string().trim().max(120).optional() }).strict();
 export const sendMessageSchema = z.object({
   fromMailboxId: z.string().cuid(),

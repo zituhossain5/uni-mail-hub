@@ -81,7 +81,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
   }
 }
 
-const logger = pino({ redact: ['req.headers.authorization', 'req.headers.cookie', 'password', 'encryptedPassword', 'secret', 'apiKey', 'token', 'keyHash', 'MAIL_CREDENTIAL_ENCRYPTION_KEY'], level: process.env.NODE_ENV === 'production' ? 'info' : 'debug' });
+const logger = pino({ redact: ['req.headers.authorization', 'req.headers.cookie', 'headers.authorization', 'password', 'encryptedPassword', 'encryptedApiToken', 'apiToken', 'secret', 'apiKey', 'token', 'keyHash', 'MAIL_CREDENTIAL_ENCRYPTION_KEY'], level: process.env.NODE_ENV === 'production' ? 'info' : 'debug' });
 export class JsonLogger implements LoggerService {
   log(message: unknown, context?: string) { logger.info({ context }, String(message)); }
   error(message: unknown, trace?: string, context?: string) { logger.error({ context, ...(process.env.NODE_ENV === 'production' ? {} : { trace }) }, String(message)); }
