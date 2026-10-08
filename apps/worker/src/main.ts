@@ -9,6 +9,8 @@ import { queueNames } from '@uni/shared';
 import { processMailboxSync } from './imap-sync';
 import { withMailboxSyncLease } from './sync-lease';
 import { processCpanelDiscovery } from './cpanel-discovery';
+import { processMonitoringRun } from './monitoring';
+import { randomUUID } from 'node:crypto';
 
 const config = readConfig();
 const key = decodeEncryptionKey(config.MAIL_CREDENTIAL_ENCRYPTION_KEY);
@@ -18,9 +20,15 @@ const connection = new Redis(config.REDIS_URL, { maxRetriesPerRequest: null, laz
 const queue = new Queue('mail-send', { connection });
 const syncQueue = new Queue('mail-sync', { connection });
 const cpanelQueue = new Queue('cpanel-discovery', { connection });
+const monitoringQueue = new Queue('monitoring', { connection });
+const monitoringQueues = { 'mail-send': queue, 'mail-sync': syncQueue, 'cpanel-discovery': cpanelQueue, monitoring: monitoringQueue };
+const workerId = randomUUID();
+const workerStartedAt = new Date().toISOString();
 const workers: Worker[] = [];
 let timer: NodeJS.Timeout | undefined;
 let syncTimer: NodeJS.Timeout | undefined;
+let monitoringTimer: NodeJS.Timeout | undefined;
+let heartbeatTimer: NodeJS.Timeout | undefined;
 let dispatching = false;
 let syncScheduleTask: Promise<void> | null = null;
 
@@ -37,6 +45,25 @@ async function scheduleSync() {
       cursor = mailboxes.at(-1)?.id;
     }
   } catch (error) { log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'mail sync scheduling deferred'); }
+}
+
+async function heartbeat() {
+  const lastHeartbeatAt = new Date().toISOString();
+  await connection.set('monitor:worker:last', JSON.stringify({ workerId, workerType: 'mail', startedAt: workerStartedAt, lastHeartbeatAt }), 'EX', config.MONITOR_WORKER_HEARTBEAT_SECONDS * 2);
+}
+
+async function scheduleMonitoring() {
+  try {
+    if (!await connection.exists('monitor:run:lease')) {
+      await db.monitoringRun.updateMany({ where: { status: 'RUNNING', startedAt: { lt: new Date(Date.now() - 30000) } }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'MONITORING_INTERRUPTED' } });
+      await db.monitoringRun.updateMany({ where: { status: 'QUEUED', createdAt: { lt: new Date(Date.now() - 120000) } }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'MONITORING_QUEUE_STALE' } });
+    }
+    if (await db.monitoringRun.findFirst({ where: { status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } })) return;
+    if (await db.monitoringRun.findFirst({ where: { createdAt: { gte: new Date(Date.now() - config.MONITORING_INTERVAL_MINUTES * 60000) } }, select: { id: true } })) return;
+    const run = await db.monitoringRun.create({ data: { trigger: 'SCHEDULED' } });
+    try { await monitoringQueue.add('run', { runId: run.id }, { jobId: run.id, attempts: 1, removeOnComplete: { age: 86400, count: 1000 }, removeOnFail: { age: 86400, count: 1000 } }); }
+    catch { await db.monitoringRun.update({ where: { id: run.id }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'MONITORING_QUEUE_UNAVAILABLE' } }); }
+  } catch (error) { log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'monitoring scheduling deferred'); }
 }
 
 function triggerSyncSchedule() {
@@ -137,9 +164,11 @@ async function shutdown() {
   if (closing) return; closing = true;
   if (timer) clearInterval(timer);
   if (syncTimer) clearInterval(syncTimer);
+  if (monitoringTimer) clearInterval(monitoringTimer);
+  if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (syncScheduleTask) await syncScheduleTask;
   await Promise.all(workers.map(worker => worker.close()));
-  await queue.close(); await syncQueue.close(); await cpanelQueue.close(); await connection.quit(); await db.$disconnect();
+  await queue.close(); await syncQueue.close(); await cpanelQueue.close(); await monitoringQueue.close(); await connection.quit(); await db.$disconnect();
   log.info('worker stopped'); process.exit(0);
 }
 
@@ -150,6 +179,7 @@ async function main() {
       if (name === 'mail-send') return processMessage(String(job.data.messageId));
       if (name === 'mail-sync') return processSyncJob(String(job.data.mailboxId));
       if (name === 'cpanel-discovery') return processCpanelDiscovery(db, key, log, String(job.data.runId));
+      if (name === 'monitoring') return processMonitoringRun(db, connection, config, key, String(job.data.runId), monitoringQueues);
       throw new Error(`Processor for ${job.queueName} is not implemented`);
     }, { connection, concurrency: name === 'mail-send' ? config.MAIL_SEND_WORKER_CONCURRENCY : name === 'mail-sync' ? config.MAIL_SYNC_WORKER_CONCURRENCY : 1 });
     worker.on('failed', (job, error) => log.error({ queue: name, jobId: job?.id, errorType: error.name }, 'job failed'));
@@ -161,8 +191,12 @@ async function main() {
   for (const run of interrupted) await db.cpanelDiscoveryRun.update({ where: { id: run.id }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'CPANEL_DISCOVERY_INTERRUPTED', errorMessage: 'Discovery was interrupted; run it again.' } });
   await recoverSyncRuns();
   await triggerSyncSchedule();
+  await heartbeat();
+  await scheduleMonitoring();
   timer = setInterval(() => { void recoverStale().then(dispatchOutbox).catch(error => log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'reconciliation deferred')); }, 5000);
   syncTimer = setInterval(() => { void triggerSyncSchedule(); }, config.MAIL_SYNC_INTERVAL_MINUTES * 60000);
+  heartbeatTimer = setInterval(() => { void heartbeat().catch(error => log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'worker heartbeat deferred')); }, 20000);
+  monitoringTimer = setInterval(() => { void scheduleMonitoring(); }, 60000);
   log.info({ queues: queueNames, concurrency: config.MAIL_SEND_WORKER_CONCURRENCY }, 'worker ready');
 }
 process.on('SIGINT', () => void shutdown()); process.on('SIGTERM', () => void shutdown());

@@ -12,7 +12,18 @@ export default function LoginPage() {
     const fields = new FormData(event.currentTarget);
     try {
       const response = await fetch('/api/v1/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email: fields.get('email'), password: fields.get('password') }) });
-      if (!response.ok) { const body = await response.json(); setError(body.message ?? 'Sign in failed'); return; }
+      if (!response.ok) {
+        const body: unknown = response.headers.get('content-type')?.includes('application/json')
+          ? await response.json().catch(() => null)
+          : null;
+        const message = typeof body === 'object' && body !== null && 'message' in body && typeof body.message === 'string'
+          ? body.message
+          : response.status === 404
+            ? 'Sign-in endpoint was not found. Check the Uni Mail Hub API connection.'
+            : 'Sign in failed. Please try again.';
+        setError(message);
+        return;
+      }
       router.replace('/dashboard'); router.refresh();
     } catch { setError('Unable to reach the server. Please try again.'); }
     finally { setLoading(false); }

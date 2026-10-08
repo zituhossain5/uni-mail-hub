@@ -1,7 +1,7 @@
 import { Body, Controller, Delete, Get, HttpException, Inject, Param, Patch, Post, Req } from '@nestjs/common';
 import { domainSchema, mailboxSchema, projectSchema } from '@uni/shared';
 import { z } from 'zod';
-import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { AuthedRequest, Database, RedisConnection, SuperAdmin, parse } from './core';
 
 const idSchema = z.string().cuid();
 const projectPatch = projectSchema.partial().refine((value) => Object.keys(value).length > 0);
@@ -138,7 +138,7 @@ export class MailboxesController {
 
 @Controller('dashboard')
 export class DashboardController {
-  constructor(@Inject(Database) private readonly db: Database) {}
+  constructor(@Inject(Database) private readonly db: Database, @Inject(RedisConnection) private readonly redis: RedisConnection) {}
   @Get() async get() {
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const [projects, domains, mailboxes, healthyMailboxes, warningMailboxes, errorMailboxes, unknownMailboxes, queuedMessages, processingMessages, retryScheduledMessages, smtpAcceptedToday, failedToday, recentActivity] = await Promise.all([
@@ -154,6 +154,20 @@ export class DashboardController {
       this.db.outgoingMessage.count({ where: { status: 'FAILED', failedAt: { gte: today } } }),
       this.db.auditLog.findMany({ take: 8, orderBy: { createdAt: 'desc' }, select: { id: true, action: true, entityType: true, createdAt: true, user: { select: { name: true } } } }),
     ]);
-    return { projects, domains, mailboxes, healthyMailboxes, warningMailboxes, errorMailboxes, unknownMailboxes, issueMailboxes: warningMailboxes + errorMailboxes, queuedMessages, processingMessages, retryScheduledMessages, smtpAcceptedToday, failedToday, recentActivity };
+    const lastMonitoringRun = await this.db.monitoringRun.findFirst({ where: { status: { in: ['SUCCESS', 'PARTIAL'] } }, orderBy: { completedAt: 'desc' }, select: { id: true, completedAt: true } });
+    const [criticalIssues, domainWarnings, queueFailures, monitoredHealthyMailboxes, monitoredAttentionMailboxes] = await Promise.all([
+      this.db.monitoringIssue.count({ where: { status: 'OPEN', severity: 'CRITICAL' } }),
+      this.db.monitoringIssue.count({ where: { status: 'OPEN', targetType: 'DOMAIN', severity: 'WARNING' } }),
+      this.db.monitoringIssue.count({ where: { status: 'OPEN', targetType: 'QUEUE' } }),
+      lastMonitoringRun ? this.db.monitoringResult.count({ where: { runId: lastMonitoringRun.id, targetType: 'MAILBOX', checkType: 'OVERALL', status: 'HEALTHY' } }) : Promise.resolve(0),
+      lastMonitoringRun ? this.db.monitoringResult.count({ where: { runId: lastMonitoringRun.id, targetType: 'MAILBOX', checkType: 'OVERALL', status: { in: ['WARNING', 'CRITICAL'] } } }) : Promise.resolve(0),
+    ]);
+    let worker = 'CRITICAL';
+    try {
+      const value = await this.redis.client.get('monitor:worker:last');
+      const parsed = value ? JSON.parse(value) as { lastHeartbeatAt?: string } : null;
+      if (parsed?.lastHeartbeatAt && Date.now() - new Date(parsed.lastHeartbeatAt).getTime() <= Number(process.env.MONITOR_WORKER_HEARTBEAT_SECONDS ?? 90) * 1000) worker = 'HEALTHY';
+    } catch { /* live worker status remains critical */ }
+    return { projects, domains, mailboxes, healthyMailboxes, warningMailboxes, errorMailboxes, unknownMailboxes, issueMailboxes: warningMailboxes + errorMailboxes, queuedMessages, processingMessages, retryScheduledMessages, smtpAcceptedToday, failedToday, recentActivity, monitoring: { lastCheckedAt: lastMonitoringRun?.completedAt ?? null, criticalIssues, domainWarnings, queueFailures, healthyMailboxes: monitoredHealthyMailboxes, attentionMailboxes: monitoredAttentionMailboxes, worker } };
   }
 }

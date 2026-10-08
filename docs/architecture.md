@@ -1,5 +1,7 @@
 # Architecture
 
+Module 9 adds a BullMQ `monitoring` queue and persisted runs, results, and reconciled issues. The worker checks registered resources and writes a Redis heartbeat; the authenticated Monitoring API serves the UI and the dashboard. See [monitoring](monitoring.md) for evidence rules and thresholds.
+
 ```text
 Browser -> Next.js UI and cookie relay -> NestJS admin API -> PostgreSQL
 Client application -> project API key -> NestJS sending API -> PostgreSQL message + outbox

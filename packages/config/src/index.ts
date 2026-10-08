@@ -24,6 +24,15 @@ const schema = z.object({
   MAIL_SYNC_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(250),
   MAIL_SYNC_FLAG_REFRESH_LIMIT: z.coerce.number().int().min(0).max(5000).default(500),
   MAIL_ATTACHMENT_MAX_BYTES: z.coerce.number().int().min(1024).max(104857600).default(10485760),
+  MONITORING_INTERVAL_MINUTES: z.coerce.number().int().min(1).max(1440).default(10),
+  MONITOR_SYNC_WARNING_MINUTES: z.coerce.number().int().min(1).default(15),
+  MONITOR_SYNC_CRITICAL_MINUTES: z.coerce.number().int().min(1).default(60),
+  MONITOR_QUOTA_WARNING_PERCENT: z.coerce.number().int().min(1).max(99).default(80),
+  MONITOR_QUOTA_CRITICAL_PERCENT: z.coerce.number().int().min(1).max(100).default(95),
+  MONITOR_QUOTA_MAX_AGE_HOURS: z.coerce.number().int().min(1).max(8760).default(24),
+  MONITOR_WORKER_HEARTBEAT_SECONDS: z.coerce.number().int().min(10).max(3600).default(90),
+  MONITOR_QUEUE_BACKLOG_WARNING: z.coerce.number().int().min(1).max(100000).default(100),
+  MONITOR_TLS_WARNING_DAYS: z.coerce.number().int().min(1).max(365).default(30),
 });
 
 export function readConfig() {

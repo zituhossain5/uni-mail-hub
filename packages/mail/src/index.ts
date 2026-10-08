@@ -11,7 +11,7 @@ export function createSmtpTransport(endpoint: Endpoint, auth: { user: string; pa
 }
 
 export function classifyConnectionError(protocol: Protocol, error: unknown): { errorCode: string; message: string } {
-  const e = error as { code?: string; responseCode?: number; message?: string };
+  const e = error as { code?: string; responseCode?: number; message?: string; authenticationFailed?: boolean };
   const code = String(e?.code ?? '').toUpperCase();
   const message = String(e?.message ?? '').toLowerCase();
   let reason = 'CONNECTION_FAILED';
@@ -19,7 +19,7 @@ export function classifyConnectionError(protocol: Protocol, error: unknown): { e
   else if (code === 'ECONNREFUSED') reason = 'CONNECTION_REFUSED';
   else if (['ETIMEDOUT', 'ESOCKETTIMEDOUT', 'ETIMEOUT'].includes(code) || message.includes('timeout')) reason = 'TIMEOUT';
   else if (code.includes('TLS') || code.includes('CERT') || message.includes('certificate') || message.includes('tls') || message.includes('ssl')) reason = 'TLS_FAILED';
-  else if (['EAUTH', 'AUTHENTICATIONFAILED'].includes(code) || e?.responseCode === 535 || message.includes('authentication failed') || message.includes('invalid credentials') || message.includes('login failed')) reason = 'AUTH_FAILED';
+  else if (e?.authenticationFailed === true || ['EAUTH', 'AUTHENTICATIONFAILED'].includes(code) || e?.responseCode === 535 || message.includes('authentication failed') || message.includes('invalid credentials') || message.includes('login failed')) reason = 'AUTH_FAILED';
   const messages: Record<string, string> = { DNS_FAILED: 'Mail host could not be resolved.', CONNECTION_REFUSED: 'Mail server refused the connection.', TIMEOUT: 'Mail server connection timed out.', TLS_FAILED: 'TLS negotiation or certificate validation failed.', AUTH_FAILED: 'Authentication failed. Verify the mailbox username and password.', CONNECTION_FAILED: 'Mail server connection failed.' };
   return { errorCode: `${protocol}_${reason}`, message: messages[reason] ?? messages.CONNECTION_FAILED! };
 }

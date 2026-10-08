@@ -1,0 +1,13 @@
+.monitor-overview{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:13px;margin-bottom:17px}
+.monitor-overview>div{background:#fff;border:1px solid var(--line);border-radius:11px;padding:16px 19px;display:grid;gap:7px}
+.monitor-overview span{font-size:12px;color:#64748b}.monitor-overview strong{font-size:25px;letter-spacing:-.04em}
+.dashboard-monitor{grid-template-columns:repeat(5,minmax(0,1fr))}
+.monitor-live{display:flex;align-items:center;flex-wrap:wrap;gap:20px;border:1px solid #dbeafe;background:#f8fbff;border-radius:10px;padding:12px 16px;margin-bottom:18px;font-size:12px;color:#475569}
+.monitor-live>span{display:flex;align-items:center;gap:8px}.monitor-live strong{display:flex;align-items:center;gap:8px;font-weight:600}
+.monitor-section{margin-bottom:18px}.monitor-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:18px}.monitor-grid .monitor-section{margin-bottom:0}
+.monitor-list{padding:5px 17px}.monitor-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:13px 5px;border-bottom:1px solid #f1f5f9}.monitor-row:last-child{border-bottom:0}.monitor-row>div{min-width:0;display:grid;gap:4px}.monitor-row a{font-size:13px;font-weight:700;color:#1d4ed8}.monitor-row strong{font-size:13px}.monitor-row small,.monitor-note{display:block;color:#64748b;font-size:11px;line-height:1.5;overflow-wrap:anywhere}.monitor-row .status-badge{flex-shrink:0}
+.monitor-tabs{display:flex;gap:8px;padding:14px 18px 0}.monitor-tabs button{border:0;background:#f1f5f9;color:#475569;border-radius:7px;padding:8px 12px;font-size:12px;cursor:pointer}.monitor-tabs button.selected{background:#dbeafe;color:#1d4ed8;font-weight:700}.monitor-section table a{display:inline-flex;align-items:center;gap:4px;color:#2563eb;font-weight:700}.monitor-empty{padding:20px;color:#64748b;font-size:12px}
+.monitor-more{padding:14px 18px;border-top:1px solid #f1f5f9;text-align:center}
+.monitor-selector{display:flex;align-items:flex-end;gap:12px}.monitor-selector label{flex:1;display:grid;gap:7px;font-size:12px;font-weight:700}.monitor-selector input{width:100%;border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;font:inherit}.monitor-selector .primary-button{white-space:nowrap}
+@media(max-width:850px){.monitor-grid{grid-template-columns:1fr}.monitor-overview{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:500px){.monitor-live{align-items:flex-start;flex-direction:column}.monitor-selector{align-items:stretch;flex-direction:column}}

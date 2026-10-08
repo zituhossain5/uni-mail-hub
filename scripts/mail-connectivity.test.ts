@@ -27,6 +27,7 @@ test('connection errors are normalized without raw server text', () => {
   const samples = [
     [{ code: 'ETIMEDOUT', message: 'secret' }, 'IMAP_TIMEOUT'],
     [{ code: 'EAUTH', message: 'secret' }, 'IMAP_AUTH_FAILED'],
+    [{ authenticationFailed: true, responseText: 'secret' }, 'IMAP_AUTH_FAILED'],
     [{ code: 'CERT_HAS_EXPIRED', message: 'secret' }, 'IMAP_TLS_FAILED'],
     [{ code: 'ECONNREFUSED', message: 'secret' }, 'IMAP_CONNECTION_REFUSED'],
   ] as const;

@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter, useSearchParams } from 'next/navigation';
-import { useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { AlertCircle, ArrowRight, Inbox, MailSearch, Paperclip, RefreshCw, Search, SlidersHorizontal, Star, X } from 'lucide-react';
 
 type View = 'unified' | 'search' | 'unread' | 'flagged' | 'attachments';
@@ -119,6 +119,16 @@ export function MailExplorer({ view }: { view: View }) {
     finally { setLoadingMore(false); }
   }
   const returnTo = `${pathname}${queryString ? `?${queryString}` : ''}`;
+  const scrollKey = `webmail-scroll:${returnTo}`;
+  const rememberScroll = useCallback(() => { window.sessionStorage.setItem(scrollKey, String(window.scrollY)); }, [scrollKey]);
+  useEffect(() => {
+    if (loading) return;
+    const saved = window.sessionStorage.getItem(scrollKey);
+    if (!saved) return;
+    window.sessionStorage.removeItem(scrollKey);
+    const frame = window.requestAnimationFrame(() => window.scrollTo(0, Number(saved) || 0));
+    return () => window.cancelAnimationFrame(frame);
+  }, [loading, scrollKey]);
   useEffect(() => {
     function keydown(event: KeyboardEvent) {
       const target = event.target as HTMLElement;
@@ -128,12 +138,12 @@ export function MailExplorer({ view }: { view: View }) {
       if (event.key === 'ArrowDown' || event.key === 'j') { event.preventDefault(); setSelected(index => Math.min(index + 1, items.length - 1)); }
       if (event.key === 'ArrowUp' || event.key === 'k') { event.preventDefault(); setSelected(index => Math.max(index - 1, 0)); }
       if ((event.key === 'Enter' || event.key === 'o') && selected >= 0 && items[selected]) {
-        event.preventDefault(); router.push(resultHref(items[selected], returnTo));
+        event.preventDefault(); rememberScroll(); router.push(resultHref(items[selected], returnTo));
       }
     }
     document.addEventListener('keydown', keydown);
     return () => document.removeEventListener('keydown', keydown);
-  }, [items, selected, router, returnTo]);
+  }, [items, selected, router, returnTo, rememberScroll]);
   useEffect(() => { if (selected >= 0) rowRefs.current[selected]?.focus(); }, [selected]);
 
   const chips = visibleFilters.filter(key => current.get(key) && !(key === 'folder' && current.get(key) === 'INBOX'));
@@ -153,7 +163,7 @@ export function MailExplorer({ view }: { view: View }) {
     {chips.length > 0 && <div className="mail-explorer-chips" aria-label="Active filters">{chips.map(key => <button key={key} type="button" onClick={() => setFilter(key, '')}>{key === 'q' ? `Search: ${current.get(key)}` : `${key}: ${key.endsWith('Ids') ? current.get(key)?.split(',').length : current.get(key)}`} <X size={12}/></button>)}<button type="button" onClick={() => update(new URLSearchParams())}>Clear filters</button></div>}
     {mailboxError && <div className="webmail-notice error" role="alert"><AlertCircle size={16}/>{mailboxError}</div>}
     <div className="mail-explorer-results"><div className="webmail-list-head"><div><h2>{viewNames[view]}</h2><p>{loading ? 'Loading conversations…' : `${items.length}${nextCursor ? '+' : ''} conversations shown`}</p></div><span className="mail-explorer-hint">↑ ↓ or j k · Enter/open · / search</span></div>
-      {loading ? <div className="webmail-list-skeleton" role="status" aria-label="Loading conversations">{Array.from({ length: 6 }, (_, i) => <div key={i}><i/><span><b/><em/></span></div>)}</div> : error && !items.length ? <div className="webmail-empty" role="alert"><AlertCircle size={28}/><h3>Search unavailable</h3><p>{error}</p><button className="secondary-button" onClick={() => setReload(value => value + 1)}>Try again</button></div> : !items.length ? <div className="webmail-empty"><MailSearch size={30}/><h3>No matching conversations</h3><p>Try a different search or clear some filters. Only synchronized mail can appear here.</p></div> : <><div className="webmail-rows">{items.map((item, index) => <Link key={`${item.mailboxId}:${item.folderId}:${item.threadKey}`} ref={element => { rowRefs.current[index] = element; }} href={resultHref(item, returnTo)} onFocus={() => setSelected(index)} className={`webmail-row mail-explorer-row ${item.unread ? 'unread' : ''} ${selected === index ? 'selected' : ''}`} aria-label={`${item.unread ? 'Unread, ' : ''}${item.fromName || item.fromEmail || 'Unknown sender'}, ${item.subject || 'No subject'}, ${item.mailboxEmail}, ${item.messageCount} messages`}><span className="webmail-avatar" aria-hidden="true">{(item.fromName || item.fromEmail || '?').slice(0, 1).toUpperCase()}</span><span className="webmail-row-main"><span className="webmail-row-top"><strong>{item.fromName || item.fromEmail || 'Unknown sender'}</strong><time dateTime={item.at}>{new Date(item.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</time></span><span className="webmail-row-subject">{item.subject || '(No subject)'}{item.messageCount > 1 && <small> {item.messageCount}</small>}</span><span className="webmail-row-bottom"><span>{item.matchedOlderMessage ? `Matched older message: ${item.matchSnippet}` : item.snippet || 'No preview available'}</span>{item.attachment && <Paperclip size={13} aria-label="Has attachment"/>}{item.flagged && <Star size={13} fill="currentColor" aria-label="Flagged"/>}</span><span className="mail-explorer-identity">{item.projectName} / {item.mailboxEmail} · {item.folderName}</span></span>{item.unread && <span className="webmail-unread-dot" aria-hidden="true"/>}<ArrowRight className="mail-explorer-open" size={15} aria-hidden="true"/></Link>)}</div>{error && <p className="form-error" role="alert">{error}</p>}{nextCursor && <div className="webmail-load-more"><button className="secondary-button" disabled={loadingMore} onClick={() => void more()}>{loadingMore ? 'Loading…' : 'Load more conversations'}</button></div>}</>}
-    </div><p className="mail-explorer-note"><Inbox size={14}/> Results reflect the most recent synchronization. Opening a message does not mark it read.</p>
+      {loading ? <div className="webmail-list-skeleton" role="status" aria-label="Loading conversations">{Array.from({ length: 6 }, (_, i) => <div key={i}><i/><span><b/><em/></span></div>)}</div> : error && !items.length ? <div className="webmail-empty" role="alert"><AlertCircle size={28}/><h3>Search unavailable</h3><p>{error}</p><button className="secondary-button" onClick={() => setReload(value => value + 1)}>Try again</button></div> : !items.length ? <div className="webmail-empty"><MailSearch size={30}/><h3>No matching conversations</h3><p>Try a different search or clear some filters. Only synchronized mail can appear here.</p></div> : <><div className="webmail-rows">{items.map((item, index) => <Link key={`${item.mailboxId}:${item.folderId}:${item.threadKey}`} ref={element => { rowRefs.current[index] = element; }} href={resultHref(item, returnTo)} onClick={rememberScroll} onFocus={() => setSelected(index)} className={`webmail-row mail-explorer-row ${item.unread ? 'unread' : ''} ${selected === index ? 'selected' : ''}`} aria-label={`${item.unread ? 'Unread, ' : ''}${item.fromName || item.fromEmail || 'Unknown sender'}, ${item.subject || 'No subject'}, ${item.mailboxEmail}, ${item.messageCount} messages`}><span className="webmail-avatar" aria-hidden="true">{(item.fromName || item.fromEmail || '?').slice(0, 1).toUpperCase()}</span><span className="webmail-row-main"><span className="webmail-row-top"><strong>{item.fromName || item.fromEmail || 'Unknown sender'}</strong><time dateTime={item.at}>{new Date(item.at).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' })}</time></span><span className="webmail-row-subject">{item.subject || '(No subject)'}{item.messageCount > 1 && <small> {item.messageCount}</small>}</span><span className="webmail-row-bottom"><span>{item.matchedOlderMessage ? `Matched older message: ${item.matchSnippet}` : item.snippet || 'No preview available'}</span>{item.attachment && <Paperclip size={13} aria-label="Has attachment"/>}{item.flagged && <Star size={13} fill="currentColor" aria-label="Flagged"/>}</span><span className="mail-explorer-identity">{item.projectName} / {item.mailboxEmail} · {item.folderName}</span></span>{item.unread && <span className="webmail-unread-dot" aria-hidden="true"/>}<ArrowRight className="mail-explorer-open" size={15} aria-hidden="true"/></Link>)}</div>{error && <p className="form-error" role="alert">{error}</p>}{nextCursor && <div className="webmail-load-more"><button className="secondary-button" disabled={loadingMore} onClick={() => void more()}>{loadingMore ? 'Loading…' : 'Load more conversations'}</button></div>}</>}
+    </div><p className="mail-explorer-note"><Inbox size={14}/> Results reflect synchronized mail. Opening a message marks it read after a brief pause.</p>
   </div>;
 }

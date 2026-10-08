@@ -106,6 +106,7 @@ model Domain {
   updatedAt DateTime     @updatedAt
   mailboxes Mailbox[]
   cpanelDiscoveries CpanelDiscoveredDomain[]
+  dkimSelectors String[] @default([])
 
   @@index([projectId])
 }
@@ -610,4 +611,80 @@ model AuditLog {
 
   @@index([createdAt])
   @@index([userId])
+}
+
+enum MonitoringStatus {
+  HEALTHY
+  WARNING
+  CRITICAL
+  UNKNOWN
+}
+
+enum MonitoringRunStatus {
+  QUEUED
+  RUNNING
+  SUCCESS
+  PARTIAL
+  FAILED
+}
+
+enum MonitoringIssueStatus {
+  OPEN
+  RESOLVED
+}
+
+model MonitoringRun {
+  id String @id @default(cuid())
+  trigger String
+  status MonitoringRunStatus @default(QUEUED)
+  startedAt DateTime?
+  completedAt DateTime?
+  resultCount Int @default(0)
+  issueCount Int @default(0)
+  errorCode String?
+  requestedByUserId String?
+  createdAt DateTime @default(now())
+  results MonitoringResult[]
+
+  @@index([status, createdAt])
+  @@index([createdAt])
+}
+
+model MonitoringResult {
+  id String @id @default(cuid())
+  runId String
+  run MonitoringRun @relation(fields: [runId], references: [id], onDelete: Cascade)
+  targetType String
+  targetId String
+  targetName String
+  checkType String
+  status MonitoringStatus
+  summary String
+  details Json?
+  checkedAt DateTime @default(now())
+  latencyMs Int?
+  errorCode String?
+
+  @@unique([runId, targetType, targetId, checkType])
+  @@index([targetType, targetId, checkedAt])
+  @@index([status, checkedAt])
+}
+
+model MonitoringIssue {
+  id String @id @default(cuid())
+  targetType String
+  targetId String
+  targetName String
+  checkType String
+  status MonitoringIssueStatus @default(OPEN)
+  severity MonitoringStatus
+  summary String
+  errorCode String?
+  firstDetectedAt DateTime @default(now())
+  lastDetectedAt DateTime @default(now())
+  resolvedAt DateTime?
+  lastHealthyAt DateTime?
+
+  @@index([status, severity, lastDetectedAt])
+  @@index([targetType, targetId, checkType, status])
 }
