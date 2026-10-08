@@ -6,9 +6,9 @@ export function PageHeader({ eyebrow, title, description, status, actions }: { e
 }
 
 const tones: Record<string, string> = {
-  ACTIVE: 'success', HEALTHY: 'success', SUCCESS: 'success', CONFIGURED: 'success', SMTP_ACCEPTED: 'success', ACCEPTED: 'success',
+  ACTIVE: 'success', HEALTHY: 'success', SUCCESS: 'success', CONFIGURED: 'success', SMTP_ACCEPTED: 'success', ACCEPTED: 'success', DELIVERED: 'success',
   WARNING: 'warning', UNKNOWN: 'neutral', UNVERIFIED: 'warning', PROCESSING: 'info', RUNNING: 'info', QUEUED: 'info', RETRY_SCHEDULED: 'warning', SMTP_ACCEPTED_WITH_REJECTIONS: 'warning', PARTIAL: 'warning',
-  ERROR: 'danger', CRITICAL: 'danger', FAILED: 'danger', REVOKED: 'danger', EXPIRED: 'danger', DISABLED: 'neutral', INACTIVE: 'neutral', CANCELLED: 'neutral', PENDING: 'neutral', RESOLVED: 'success', OPEN: 'warning',
+  ERROR: 'danger', CRITICAL: 'danger', FAILED: 'danger', REVOKED: 'danger', EXPIRED: 'danger', DISABLED: 'neutral', INACTIVE: 'neutral', CANCELLED: 'neutral', PENDING: 'neutral', RESOLVED: 'success', OPEN: 'warning', DELIVERING: 'info', HARD_BOUNCE: 'danger', MANUAL: 'neutral',
 };
 export function StatusBadge({ status, label }: { status: string; label?: string }) {
   return <span className={`status-badge status-${tones[status.toUpperCase()] ?? 'neutral'}`}><span className="status-badge-dot" aria-hidden="true"/>{label ?? status.replaceAll('_', ' ').toLowerCase()}</span>;

@@ -11,6 +11,8 @@ import { withMailboxSyncLease } from './sync-lease';
 import { processCpanelDiscovery } from './cpanel-discovery';
 import { processMonitoringRun } from './monitoring';
 import { randomUUID } from 'node:crypto';
+import { dispatchWebhookDeliveries, processWebhookDelivery } from './webhook-delivery';
+import { emitWebhookEvent } from './webhook-events';
 
 const config = readConfig();
 const key = decodeEncryptionKey(config.MAIL_CREDENTIAL_ENCRYPTION_KEY);
@@ -21,7 +23,8 @@ const queue = new Queue('mail-send', { connection });
 const syncQueue = new Queue('mail-sync', { connection });
 const cpanelQueue = new Queue('cpanel-discovery', { connection });
 const monitoringQueue = new Queue('monitoring', { connection });
-const monitoringQueues = { 'mail-send': queue, 'mail-sync': syncQueue, 'cpanel-discovery': cpanelQueue, monitoring: monitoringQueue };
+const webhookQueue = new Queue('webhook-delivery', { connection });
+const monitoringQueues = { 'mail-send': queue, 'mail-sync': syncQueue, 'cpanel-discovery': cpanelQueue, monitoring: monitoringQueue, 'webhook-delivery': webhookQueue };
 const workerId = randomUUID();
 const workerStartedAt = new Date().toISOString();
 const workers: Worker[] = [];
@@ -101,6 +104,8 @@ async function dispatchOutbox() {
     }
   } catch (error) { log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'outbox dispatch deferred'); }
   finally { dispatching = false; }
+  try { await dispatchWebhookDeliveries(db, webhookQueue); }
+  catch (error) { log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'webhook dispatch deferred'); }
 }
 
 async function recoverStale() {
@@ -122,6 +127,8 @@ async function processMessage(messageId: string) {
   let rfcMessageId: string | null = null; let responseCode: number | null = null;
   let failure: ReturnType<typeof classifySendError> | null = null;
   try {
+    const suppressed = await db.suppression.findFirst({ where: { projectId: message.projectId, email: { in: message.recipients.map(item => item.email.toLowerCase()) } }, select: { id: true } });
+    if (suppressed) throw { code: 'RECIPIENT_SUPPRESSED' };
     const server = mailbox.mailServer;
     if (!mailbox.isActive || mailbox.status === 'DISABLED') throw { code: 'MAILBOX_DISABLED' };
     if (!server || !server.smtpHost || !server.smtpPort || server.status !== 'ACTIVE') throw { code: 'MAIL_SERVER_DISABLED' };
@@ -134,7 +141,7 @@ async function processMessage(messageId: string) {
     if (!accepted.length) throw { code: 'SMTP_RECIPIENT_REJECTED', responseCode: responseCode ?? 550 };
   } catch (error) {
     const code = (error as { code?: string })?.code;
-    if (['MAILBOX_DISABLED', 'MAIL_SERVER_DISABLED', 'INSECURE_MAIL_SERVER', 'MAIL_CREDENTIAL_NOT_CONFIGURED', 'CREDENTIAL_DECRYPTION_FAILED'].includes(code ?? '') || (error instanceof Error && error.message === 'CREDENTIAL_DECRYPTION_FAILED')) {
+    if (['MAILBOX_DISABLED', 'MAIL_SERVER_DISABLED', 'INSECURE_MAIL_SERVER', 'MAIL_CREDENTIAL_NOT_CONFIGURED', 'CREDENTIAL_DECRYPTION_FAILED', 'RECIPIENT_SUPPRESSED'].includes(code ?? '') || (error instanceof Error && error.message === 'CREDENTIAL_DECRYPTION_FAILED')) {
       const safe = code ?? 'CREDENTIAL_DECRYPTION_FAILED'; failure = { code: safe, message: safe.replaceAll('_', ' ').toLowerCase(), retryable: false, smtpResponseCode: null };
     } else failure = classifySendError(error);
   }
@@ -147,6 +154,7 @@ async function processMessage(messageId: string) {
       if (failure.code === 'SMTP_RECIPIENT_REJECTED') await tx.outgoingRecipient.updateMany({ where: { messageId }, data: { smtpStatus: 'REJECTED', smtpResponse: failure.message } });
       await tx.outgoingMessage.update({ where: { id: messageId }, data: { status: retry ? 'RETRY_SCHEDULED' : 'FAILED', lastErrorCode: failure.code, lastErrorMessage: failure.message, failedAt: retry ? null : finishedAt } });
       if (retry) await tx.outboxEvent.create({ data: { messageId, availableAt: new Date(Date.now() + config.MAIL_SEND_BACKOFF_BASE_MS * 2 ** (message.attemptCount - 1)) } });
+      else await emitWebhookEvent(tx, { projectId: message.projectId, eventKey: `mail.failed:${messageId}`, type: 'mail.failed', resourceType: 'OutgoingMessage', resourceId: messageId, payload: { messageId, mailboxId: mailbox.id, recipients: message.recipients.filter(item => item.type !== 'BCC').map(item => ({ email: item.email, type: item.type, status: failure.code === 'SMTP_RECIPIENT_REJECTED' ? 'REJECTED' : item.smtpStatus })), failureCode: failure.code, timestamp: finishedAt.toISOString() } });
     } else {
       const acceptedSet = new Set(accepted);
       const rejectedSet = new Set([...rejected, ...pending, ...message.recipients.filter(item => !acceptedSet.has(item.email.toLowerCase())).map(item => item.email.toLowerCase())]);
@@ -154,6 +162,7 @@ async function processMessage(messageId: string) {
       await tx.smtpAttempt.create({ data: { messageId, mailboxId: mailbox.id, attemptNumber: message.attemptCount, status: partial ? 'PARTIAL' : 'ACCEPTED', startedAt, finishedAt, latencyMs, smtpResponseCode: responseCode, smtpResponse: responseCode ? `SMTP ${responseCode}` : 'SMTP accepted', messageIdHeader: rfcMessageId } });
       for (const recipient of message.recipients) await tx.outgoingRecipient.update({ where: { id: recipient.id }, data: { smtpStatus: rejectedSet.has(recipient.email.toLowerCase()) ? 'REJECTED' : 'ACCEPTED', smtpResponse: rejectedSet.has(recipient.email.toLowerCase()) ? 'Rejected by SMTP server' : 'Accepted by SMTP server' } });
       await tx.outgoingMessage.update({ where: { id: messageId }, data: { status: partial ? 'SMTP_ACCEPTED_WITH_REJECTIONS' : 'SMTP_ACCEPTED', smtpAcceptedAt: finishedAt, rfcMessageId, lastErrorCode: partial ? 'PARTIAL_RECIPIENT_REJECTION' : null, lastErrorMessage: partial ? 'Some recipients were rejected by SMTP; accepted recipients will not be resent.' : null } });
+      await emitWebhookEvent(tx, { projectId: message.projectId, eventKey: `mail.smtp_accepted:${messageId}`, type: 'mail.smtp_accepted', resourceType: 'OutgoingMessage', resourceId: messageId, payload: { messageId, mailboxId: mailbox.id, recipients: message.recipients.filter(item => item.type !== 'BCC').map(item => ({ email: item.email, type: item.type, status: rejectedSet.has(item.email.toLowerCase()) ? 'REJECTED' : 'SMTP_ACCEPTED' })), timestamp: finishedAt.toISOString() } });
     }
   });
   log.info({ messageId, status: failure ? failure.retryable && message.attemptCount < config.MAIL_SEND_MAX_ATTEMPTS ? 'RETRY_SCHEDULED' : 'FAILED' : rejected.length || pending.length ? 'SMTP_ACCEPTED_WITH_REJECTIONS' : 'SMTP_ACCEPTED', errorCode: failure?.code }, 'mail send processed');
@@ -168,7 +177,7 @@ async function shutdown() {
   if (heartbeatTimer) clearInterval(heartbeatTimer);
   if (syncScheduleTask) await syncScheduleTask;
   await Promise.all(workers.map(worker => worker.close()));
-  await queue.close(); await syncQueue.close(); await cpanelQueue.close(); await monitoringQueue.close(); await connection.quit(); await db.$disconnect();
+  await queue.close(); await syncQueue.close(); await cpanelQueue.close(); await monitoringQueue.close(); await webhookQueue.close(); await connection.quit(); await db.$disconnect();
   log.info('worker stopped'); process.exit(0);
 }
 
@@ -180,6 +189,7 @@ async function main() {
       if (name === 'mail-sync') return processSyncJob(String(job.data.mailboxId));
       if (name === 'cpanel-discovery') return processCpanelDiscovery(db, key, log, String(job.data.runId));
       if (name === 'monitoring') return processMonitoringRun(db, connection, config, key, String(job.data.runId), monitoringQueues);
+      if (name === 'webhook-delivery') return processWebhookDelivery(db, config, key, String(job.data.deliveryId));
       throw new Error(`Processor for ${job.queueName} is not implemented`);
     }, { connection, concurrency: name === 'mail-send' ? config.MAIL_SEND_WORKER_CONCURRENCY : name === 'mail-sync' ? config.MAIL_SYNC_WORKER_CONCURRENCY : 1 });
     worker.on('failed', (job, error) => log.error({ queue: name, jobId: job?.id, errorType: error.name }, 'job failed'));

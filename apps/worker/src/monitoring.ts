@@ -7,6 +7,7 @@ import { testImap, testSmtp } from '@uni/mail';
 import { Check, Health, connectionHealth, heartbeatHealth, issueDecision, queueHealth, quotaHealth, syncHealth } from './monitoring-rules';
 import { domainChecks } from './monitoring-dns';
 import { inspectMailTls } from './monitoring-tls';
+import { emitWebhookEvent } from './webhook-events';
 
 type Config = ReturnType<typeof readConfig>;
 const severity: Record<Health, number> = { HEALTHY: 0, UNKNOWN: 1, WARNING: 2, CRITICAL: 3 };
@@ -20,13 +21,17 @@ async function record(db: PrismaClient, runId: string, targetType: string, targe
     const key = { targetType, targetId, checkType, status: 'OPEN' as const };
     const open = await tx.monitoringIssue.findFirst({ where: key });
     const action = issueDecision(Boolean(open), check.status);
+    const projectId = targetType === 'MAILBOX' ? (await tx.mailbox.findUnique({ where: { id: targetId }, select: { projectId: true } }))?.projectId
+      : targetType === 'DOMAIN' ? (await tx.domain.findUnique({ where: { id: targetId }, select: { projectId: true } }))?.projectId : null;
     if (action === 'RESOLVE' && open) {
       await tx.monitoringIssue.update({ where: { id: open.id }, data: { status: 'RESOLVED', resolvedAt: now, lastHealthyAt: now } });
+      if (projectId) await emitWebhookEvent(tx, { projectId, eventKey: `monitoring.issue_resolved:${open.id}`, type: 'monitoring.issue_resolved', resourceType: 'MonitoringIssue', resourceId: open.id, payload: { issueId: open.id, targetType, targetId, checkType, severity: open.severity, timestamp: now.toISOString() } });
     } else if (action === 'UPDATE' && open) {
       await tx.monitoringIssue.update({ where: { id: open.id }, data: { severity: check.status, summary: check.summary.slice(0, 500), errorCode: check.errorCode, targetName, lastDetectedAt: now } });
     } else if (action === 'CREATE') {
       const priorHealthy = await tx.monitoringResult.findFirst({ where: { targetType, targetId, checkType, status: 'HEALTHY', checkedAt: { lt: now } }, orderBy: { checkedAt: 'desc' }, select: { checkedAt: true } });
-      await tx.monitoringIssue.create({ data: { targetType, targetId, targetName, checkType, severity: check.status, summary: check.summary.slice(0, 500), errorCode: check.errorCode, firstDetectedAt: now, lastDetectedAt: now, lastHealthyAt: priorHealthy?.checkedAt } });
+      const issue = await tx.monitoringIssue.create({ data: { targetType, targetId, targetName, checkType, severity: check.status, summary: check.summary.slice(0, 500), errorCode: check.errorCode, firstDetectedAt: now, lastDetectedAt: now, lastHealthyAt: priorHealthy?.checkedAt } });
+      if (projectId) await emitWebhookEvent(tx, { projectId, eventKey: `monitoring.issue_opened:${issue.id}`, type: 'monitoring.issue_opened', resourceType: 'MonitoringIssue', resourceId: issue.id, payload: { issueId: issue.id, targetType, targetId, checkType, severity: check.status, errorCode: check.errorCode, timestamp: now.toISOString() } });
     }
   });
 }

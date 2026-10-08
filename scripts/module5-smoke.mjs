@@ -143,6 +143,10 @@ try {
   }
   console.log('Module 5/6 smoke passed: webmail RBAC and pagination, safe HTML, stale action rejection, attachment ownership, Reply All recipient rules, threading headers, Forward content, and Mailpit SMTP acceptance.');
 } finally {
+  if (ids.project) {
+    await db.webhookDelivery.deleteMany({ where: { event: { projectId: ids.project } } });
+    await db.webhookEvent.deleteMany({ where: { projectId: ids.project } });
+  }
   if (ids.project) await db.outgoingMessage.deleteMany({ where: { projectId: ids.project } });
   if (ids.mailbox || ids.other) await db.mailbox.deleteMany({ where: { id: { in: [ids.mailbox, ids.other].filter(Boolean) } } });
   if (ids.domain) await db.domain.deleteMany({ where: { id: ids.domain } });

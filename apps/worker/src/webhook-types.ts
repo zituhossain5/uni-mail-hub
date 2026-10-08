@@ -1,0 +1,1 @@
+export type WebhookEventType = 'webhook.test' | 'mail.received' | 'mail.smtp_accepted' | 'mail.failed' | 'mail.bounced' | 'mailbox.sync_failed' | 'monitoring.issue_opened' | 'monitoring.issue_resolved';

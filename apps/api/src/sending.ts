@@ -21,6 +21,11 @@ type SendInput = z.input<typeof sendMessageSchema>;
 type ApiPrincipal = { id: string; projectId: string; scopes: string[] };
 type ApiRequest = Request & { apiPrincipal: ApiPrincipal };
 const problem = (code: string, message: string, status = 400) => new HttpException({ code, message }, status);
+async function rejectSuppressed(db: Database, projectId: string, recipients: Array<{ email: string }>) {
+  const emails = [...new Set(recipients.map(item => item.email.trim().toLowerCase()))];
+  const suppressed = await db.suppression.findFirst({ where: { projectId, email: { in: emails } }, select: { email: true } });
+  if (suppressed) throw problem('RECIPIENT_SUPPRESSED', `Recipient ${suppressed.email} is suppressed for this project`, 409);
+}
 
 @Injectable()
 export class MailQueue implements OnModuleDestroy {
@@ -80,6 +85,7 @@ export class ClientMessagesController {
     if (mailbox.mailServer.status !== 'ACTIVE') throw problem('MAIL_SERVER_DISABLED', 'Sender mail server is disabled', 409);
     if (mailbox.mailServer.smtpAuthMode === 'PASSWORD' && !mailbox.credential) throw problem('MAIL_CREDENTIAL_NOT_CONFIGURED', 'Sender mailbox credentials are missing', 409);
     const recipients = [...to.map(value => ({ ...value, type: 'TO' as const })), ...cc.map(value => ({ ...value, type: 'CC' as const })), ...bcc.map(value => ({ ...value, type: 'BCC' as const }))];
+    await rejectSuppressed(this.db, request.apiPrincipal.projectId, recipients);
     let created: { id: string; status: string; createdAt: Date; outboxEvents: { id: string }[] };
     try {
       created = await this.db.outgoingMessage.create({ data: { projectId: request.apiPrincipal.projectId, apiKeyId: keyId, fromMailboxId: mailbox.id, subject: input.subject, textBody: input.text, htmlBody: input.html, replyToEmail: input.replyTo?.email, replyToName: input.replyTo?.name, idempotencyKey, requestHash, recipients: { create: recipients }, outboxEvents: { create: {} } }, select: { id: true, status: true, createdAt: true, outboxEvents: { select: { id: true } } } });
@@ -169,6 +175,7 @@ export class AdminComposeController {
       return { id: existing.id, status: existing.status, createdAt: existing.createdAt };
     }
     const recipients = [...to.map(value => ({ ...value, type: 'TO' as const })), ...cc.map(value => ({ ...value, type: 'CC' as const })), ...bcc.map(value => ({ ...value, type: 'BCC' as const }))];
+    await rejectSuppressed(this.db, mailbox.projectId, recipients);
     let created: { id: string; status: string; createdAt: Date; outboxEvents: { id: string }[] };
     try {
       created = await this.db.outgoingMessage.create({ data: { projectId: mailbox.projectId, createdByUserId: request.user.id, fromMailboxId: mailbox.id, subject: input.subject, textBody: input.text, htmlBody: input.html, replyToEmail: input.replyTo?.email, replyToName: input.replyTo?.name, inReplyTo: headers?.inReplyTo, references: headers?.references ?? [], idempotencyKey, requestHash, recipients: { create: recipients }, outboxEvents: { create: {} } }, select: { id: true, status: true, createdAt: true, outboxEvents: { select: { id: true } } } });

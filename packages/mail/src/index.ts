@@ -73,3 +73,6 @@ export type { SyncMessage, SyncRecipient, SyncAttachment } from './imap-sync';
 export { headerId, headerThreadKey, threadKeyFor } from './threading';
 export { withMailboxSyncLease } from './mailbox-lease';
 export { replyRecipients, responseHeaders, responseSubject, forwardedBlock } from './respond';
+export { webhookEventTypes, webhookUrl, publicWebhookAddress, resolveWebhookTarget, pinnedWebhookLookupAnswer, signWebhook, verifyWebhookSignature, postWebhook } from './webhook';
+export { parseDsn } from './dsn';
+export type { DsnEvidence } from './dsn';

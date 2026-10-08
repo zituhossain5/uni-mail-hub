@@ -37,11 +37,11 @@ async function relay(request: NextRequest, context: { params: Promise<{ path: st
     }
     const data: unknown = await upstream.json();
     if (isLogin && upstream.ok && typeof data === 'object' && data !== null && 'token' in data && typeof data.token === 'string') {
-      const response = NextResponse.json({ user: 'user' in data ? data.user : null });
+      const response = NextResponse.json({ user: 'user' in data ? data.user : null }, { headers: { 'Cache-Control': 'private, no-store' } });
       response.cookies.set('umh_session', data.token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: 8 * 60 * 60 });
       return response;
     }
-    return NextResponse.json(data, { status: upstream.status });
+    return NextResponse.json(data, { status: upstream.status, headers: { 'Cache-Control': 'private, no-store' } });
   } catch {
     return NextResponse.json({ statusCode: 503, code: 'API_UNAVAILABLE', message: 'API is unavailable' }, { status: 503 });
   }

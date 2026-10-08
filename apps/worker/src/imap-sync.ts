@@ -3,6 +3,8 @@ import { readConfig } from '@uni/config';
 import { decryptSecret } from '@uni/security';
 import { advanceCursor, classifySyncError, createSyncClient, folderSpecialUse, headerId, initialUids, parseSyncMessage, threadKeyFor, type SyncMessage } from '@uni/mail';
 import type pino from 'pino';
+import { emitWebhookEvent } from './webhook-events';
+import { recordDsn } from './bounces';
 
 type Config = ReturnType<typeof readConfig>;
 type Logger = pino.Logger;
@@ -30,7 +32,7 @@ export async function saveMessage(db: PrismaClient, mailboxId: string, folderId:
       if (changed) await tx.mailMessage.update({ where: { id: existing.id }, data: flags });
     } else {
       if (!data) throw new Error('SYNC_SOURCE_MISSING');
-      const { recipients, attachments, ...fields } = data;
+      const { recipients, attachments, dsn, ...fields } = data;
       const hasValidReference = data.references.some(value => !!headerId(value));
       const parentId = !hasValidReference && headerId(data.inReplyTo);
       const parent = parentId ? await tx.mailMessage.findMany({ where: { folderId, messageIdHeader: { in: [parentId, `<${parentId}>`], mode: 'insensitive' } }, select: { threadKey: true }, take: 2 }) : [];
@@ -41,6 +43,12 @@ export async function saveMessage(db: PrismaClient, mailboxId: string, folderId:
       const record = await tx.mailMessage.create({ data: { mailboxId, folderId, imapUid: uid, ...fields, threadKey } });
       if (recipients.length) await tx.mailRecipient.createMany({ data: recipients.map(recipient => ({ messageId: record.id, ...recipient })) });
       if (attachments.length) await tx.mailAttachment.createMany({ data: attachments.map(attachment => ({ messageId: record.id, ...attachment })) });
+      const folder = await tx.mailFolder.findUniqueOrThrow({ where: { id: folderId }, select: { specialUse: true } });
+      if (folder.specialUse === 'INBOX') {
+        const mailbox = await tx.mailbox.findUniqueOrThrow({ where: { id: mailboxId }, select: { projectId: true } });
+        await emitWebhookEvent(tx, { projectId: mailbox.projectId, eventKey: `mail.received:${record.id}`, type: 'mail.received', resourceType: 'MailMessage', resourceId: record.id, payload: { mailboxId, messageId: record.id, from: { email: record.fromEmail, name: record.fromName }, subject: record.subject, receivedAt: (record.internalDate ?? record.date ?? record.createdAt).toISOString() } });
+        if (dsn) await recordDsn(tx, mailbox.projectId, record.id, dsn);
+      }
     }
     const folder = await tx.mailFolder.findUniqueOrThrow({ where: { id: folderId }, select: { highestSyncedUid: true } });
     const cursor = advanceCursor(folder.highestSyncedUid, uid, true);
@@ -174,7 +182,10 @@ export async function processMailboxSync(db: PrismaClient, config: Config, key: 
       }
     }
     const status = firstError ? foldersProcessed ? 'PARTIAL' : 'FAILED' : 'SUCCESS';
-    await db.mailSyncRun.update({ where: { id: run.id }, data: { status, completedAt: new Date(), foldersProcessed, messagesAdded, messagesUpdated, errorCode: firstError?.code, errorMessage: firstError?.message } });
+    await db.$transaction(async tx => {
+      await tx.mailSyncRun.update({ where: { id: run.id }, data: { status, completedAt: new Date(), foldersProcessed, messagesAdded, messagesUpdated, errorCode: firstError?.code, errorMessage: firstError?.message } });
+      if (status === 'FAILED' && mailbox.projectId) await emitWebhookEvent(tx, { projectId: mailbox.projectId, eventKey: `mailbox.sync_failed:${run.id}`, type: 'mailbox.sync_failed', resourceType: 'MailSyncRun', resourceId: run.id, payload: { mailboxId, runId: run.id, errorCode: firstError?.code, timestamp: new Date().toISOString() } });
+    });
     log.info({ mailboxId, runId: run.id, status, foldersProcessed, messagesAdded, messagesUpdated, errorCode: firstError?.code }, 'mailbox sync completed');
     if (firstError?.retryable) throw Object.assign(new Error(firstError.code), { syncRunRecorded: true });
   } catch (error) {
@@ -183,7 +194,10 @@ export async function processMailboxSync(db: PrismaClient, config: Config, key: 
     const normalized = ['MAIL_SERVER_DISABLED', 'MAIL_CREDENTIAL_NOT_CONFIGURED', 'INSECURE_MAIL_SERVER'].includes(specific)
       ? { code: specific, message: specific.replaceAll('_', ' ').toLowerCase(), retryable: false }
       : classifySyncError(error);
-    await db.mailSyncRun.update({ where: { id: run.id }, data: { status: foldersProcessed ? 'PARTIAL' : 'FAILED', completedAt: new Date(), foldersProcessed, messagesAdded, messagesUpdated, errorCode: normalized.code, errorMessage: normalized.message } });
+    await db.$transaction(async tx => {
+      await tx.mailSyncRun.update({ where: { id: run.id }, data: { status: foldersProcessed ? 'PARTIAL' : 'FAILED', completedAt: new Date(), foldersProcessed, messagesAdded, messagesUpdated, errorCode: normalized.code, errorMessage: normalized.message } });
+      if (!foldersProcessed && mailbox.projectId) await emitWebhookEvent(tx, { projectId: mailbox.projectId, eventKey: `mailbox.sync_failed:${run.id}`, type: 'mailbox.sync_failed', resourceType: 'MailSyncRun', resourceId: run.id, payload: { mailboxId, runId: run.id, errorCode: normalized.code, timestamp: new Date().toISOString() } });
+    });
     log.warn({ mailboxId, runId: run.id, errorCode: normalized.code }, 'mailbox sync failed');
     if (normalized.retryable) throw new Error(normalized.code);
   } finally {

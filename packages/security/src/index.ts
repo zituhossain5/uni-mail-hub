@@ -31,6 +31,8 @@ export function generateApiKey(environment: 'test' | 'live' = 'test') {
   return { rawKey, keyPrefix: rawKey.slice(0, 18), keyHash: hashApiKey(rawKey) };
 }
 
+export function generateWebhookSecret(): string { return `umhwh_${randomBytes(32).toString('base64url')}`; }
+
 export function hashApiKey(rawKey: string): string { return createHash('sha256').update(rawKey, 'utf8').digest('hex'); }
 export function apiKeysEqual(left: string, right: string): boolean {
   const a = Buffer.from(left, 'hex'); const b = Buffer.from(right, 'hex');

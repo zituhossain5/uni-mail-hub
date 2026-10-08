@@ -33,6 +33,9 @@ const schema = z.object({
   MONITOR_WORKER_HEARTBEAT_SECONDS: z.coerce.number().int().min(10).max(3600).default(90),
   MONITOR_QUEUE_BACKLOG_WARNING: z.coerce.number().int().min(1).max(100000).default(100),
   MONITOR_TLS_WARNING_DAYS: z.coerce.number().int().min(1).max(365).default(30),
+  WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
+  WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(10000),
+  WEBHOOK_RESPONSE_MAX_BYTES: z.coerce.number().int().min(256).max(65536).default(4096),
 });
 
 export function readConfig() {

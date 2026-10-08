@@ -94,6 +94,10 @@ model Project {
   mailboxes   Mailbox[]
   apiKeys     ApiKey[]
   outgoingMessages OutgoingMessage[]
+  webhookEndpoints WebhookEndpoint[]
+  webhookEvents WebhookEvent[]
+  suppressions Suppression[]
+  bounces MailBounce[]
 }
 
 model Domain {
@@ -255,7 +259,7 @@ model CpanelDiscoveredForwarder {
   source String
   destination String
   lastSeenAt DateTime @default(now())
-  @@unique([accountId, domain, source, destination])
+  @@unique([accountId, domain, source, destination], map: "CpanelDiscoveredForwarder_accountId_domain_source_destination_k")
 }
 
 model CpanelDiscoveryRun {
@@ -360,6 +364,7 @@ model MailMessage {
   updatedAt       DateTime          @updatedAt
   recipients      MailRecipient[]
   attachments     MailAttachment[]
+  bounce MailBounce?
 
   @@unique([folderId, imapUid])
   @@index([mailboxId, internalDate])
@@ -496,6 +501,7 @@ enum RecipientSmtpStatus {
   PENDING
   ACCEPTED
   REJECTED
+  BOUNCED
 }
 
 enum SmtpAttemptStatus {
@@ -543,6 +549,7 @@ model OutgoingMessage {
   recipients OutgoingRecipient[]
   attempts SmtpAttempt[]
   outboxEvents OutboxEvent[]
+  bounces MailBounce[]
 
   @@unique([apiKeyId, idempotencyKey])
   @@unique([createdByUserId, idempotencyKey], map: "OutgoingMessage_admin_idempotency_key")
@@ -687,4 +694,124 @@ model MonitoringIssue {
 
   @@index([status, severity, lastDetectedAt])
   @@index([targetType, targetId, checkType, status])
+}
+
+enum WebhookEndpointStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum WebhookDeliveryStatus {
+  PENDING
+  DELIVERING
+  DELIVERED
+  RETRY_SCHEDULED
+  FAILED
+}
+
+enum BounceClassification {
+  HARD_BOUNCE
+  SOFT_BOUNCE
+  UNKNOWN
+}
+
+enum SuppressionReason {
+  HARD_BOUNCE
+  MANUAL
+}
+
+model WebhookEndpoint {
+  id String @id @default(cuid())
+  projectId String
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  name String
+  url String
+  encryptedSecret String
+  encryptionIv String
+  encryptionAuthTag String
+  encryptionVersion Int @default(1)
+  status WebhookEndpointStatus @default(ACTIVE)
+  subscriptions String[] @default([])
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastDeliveryAt DateTime?
+  deliveries WebhookDelivery[]
+
+  @@index([projectId, status])
+}
+
+model WebhookEvent {
+  id String @id
+  projectId String
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  eventKey String @unique
+  type String
+  resourceType String
+  resourceId String
+  payload Json
+  createdAt DateTime @default(now())
+  deliveries WebhookDelivery[]
+
+  @@index([projectId, createdAt])
+}
+
+model WebhookDelivery {
+  id String @id @default(cuid())
+  eventId String
+  event WebhookEvent @relation(fields: [eventId], references: [id], onDelete: Restrict)
+  endpointId String
+  endpoint WebhookEndpoint @relation(fields: [endpointId], references: [id], onDelete: Restrict)
+  replayOfId String?
+  status WebhookDeliveryStatus @default(PENDING)
+  attemptCount Int @default(0)
+  httpStatus Int?
+  responseSnippet String?
+  durationMs Int?
+  nextAttemptAt DateTime @default(now())
+  firstAttemptAt DateTime?
+  lastAttemptAt DateTime?
+  deliveredAt DateTime?
+  errorCode String?
+  errorMessage String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([status, nextAttemptAt])
+  @@index([endpointId, createdAt])
+  @@index([eventId])
+}
+
+model MailBounce {
+  id String @id @default(cuid())
+  projectId String
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  sourceMessageId String @unique
+  sourceMessage MailMessage @relation(fields: [sourceMessageId], references: [id], onDelete: Restrict)
+  outgoingMessageId String?
+  outgoingMessage OutgoingMessage? @relation(fields: [outgoingMessageId], references: [id], onDelete: SetNull)
+  recipientEmail String?
+  originalMessageId String?
+  action String?
+  statusCode String?
+  classification BounceClassification
+  correlationCode String
+  createdAt DateTime @default(now())
+
+  @@index([projectId, createdAt])
+  @@index([outgoingMessageId])
+}
+
+model Suppression {
+  id String @id @default(cuid())
+  projectId String
+  project Project @relation(fields: [projectId], references: [id], onDelete: Restrict)
+  email String
+  reason SuppressionReason
+  source String
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  lastFailureAt DateTime?
+
+  @@unique([projectId, email])
+  @@index([projectId, createdAt])
 }

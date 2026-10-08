@@ -105,6 +105,10 @@ try {
   assert.equal(JSON.stringify(attempts).includes(rawKey), false);
   console.log('Module 3 smoke passed: key security, grants, rate limit, Mailpit delivery, BCC privacy, idempotency, duplicate job, permanent failure, temporary retry, manual retry, dashboard, revoke, admin history.');
 } finally {
+  if (projectId) {
+    await db.webhookDelivery.deleteMany({ where: { event: { projectId } } });
+    await db.webhookEvent.deleteMany({ where: { projectId } });
+  }
   if (projectId) await db.outgoingMessage.deleteMany({ where: { projectId } });
   if (keyId) await db.apiKey.deleteMany({ where: { id: keyId } });
   if (secondKeyId) await db.apiKey.deleteMany({ where: { id: secondKeyId } });

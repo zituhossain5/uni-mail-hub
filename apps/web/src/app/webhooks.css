@@ -1,0 +1,3 @@
+.project-module { display: grid; gap: 1.25rem; }
+.webhook-url { max-width: 24rem; overflow-wrap: anywhere; }
+.webhook-event { max-width: 28rem; max-height: 18rem; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; font-size: .75rem; }

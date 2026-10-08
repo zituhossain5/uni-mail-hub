@@ -1,6 +1,7 @@
 import { ImapFlow, type FetchMessageObject, type ListResponse, type MessageStructureObject } from 'imapflow';
 import { simpleParser, type AddressObject, type ParsedMail } from 'mailparser';
 import { classifyConnectionError, type Endpoint } from './index';
+import { parseDsn, type DsnEvidence } from './dsn';
 
 export type SyncRecipient = { type: 'TO' | 'CC' | 'BCC' | 'REPLY_TO'; name: string | null; email: string };
 export type SyncAttachment = { filename: string | null; contentType: string; sizeBytes: bigint | null; contentId: string | null; disposition: string | null; imapPart: string | null };
@@ -10,6 +11,7 @@ export type SyncMessage = {
   sizeBytes: bigint | null; contentStatus: 'COMPLETE' | 'SKIPPED_TOO_LARGE' | 'PARSE_FAILED';
   isSeen: boolean; isFlagged: boolean; isAnswered: boolean; isDraft: boolean; isDeleted: boolean;
   inReplyTo: string | null; references: string[]; recipients: SyncRecipient[]; attachments: SyncAttachment[];
+  dsn?: DsnEvidence | null;
 };
 
 export function createSyncClient(endpoint: Endpoint, username: string, password: string) {
@@ -110,5 +112,6 @@ export async function parseSyncMessage(message: FetchMessageObject, source: Buff
     references,
     recipients: parsed ? [...recipients(parsed.to, 'TO'), ...recipients(parsed.cc, 'CC'), ...recipients(parsed.bcc, 'BCC'), ...recipients(parsed.replyTo, 'REPLY_TO')] : envelopeRecipients(message),
     attachments: parsed ? parsedAttachments(parsed, structure) : structure,
+    dsn: parsed && source ? parseDsn(source) : null,
   };
 }

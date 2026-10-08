@@ -123,7 +123,8 @@ test('disabled mailbox skips and missing credentials is a permanent recorded fai
   await processMailboxSync(disabled, config, Buffer.alloc(32), logger, 'box', new AbortController().signal);
   assert.equal(created, false);
   const updates: object[] = [];
-  const missing = { mailbox: { findUnique: async () => ({ isActive: true, status: 'UNKNOWN', credential: null, mailServer: { status: 'ACTIVE', imapHost: 'mail.test', imapPort: 993 } }) }, mailSyncRun: { create: async () => ({ id: 'run' }), update: async (args: { data: object }) => { updates.push(args.data); } } } as unknown as PrismaClient;
+  const missingData = { mailbox: { findUnique: async () => ({ isActive: true, status: 'UNKNOWN', credential: null, mailServer: { status: 'ACTIVE', imapHost: 'mail.test', imapPort: 993 } }) }, mailSyncRun: { create: async () => ({ id: 'run' }), update: async (args: { data: object }) => { updates.push(args.data); } } };
+  const missing = { ...missingData, $transaction: async (work: (tx: typeof missingData) => Promise<void>) => work(missingData) } as unknown as PrismaClient;
   await processMailboxSync(missing, config, Buffer.alloc(32), logger, 'box', new AbortController().signal);
   assert.deepEqual(updates[0], { status: 'FAILED', completedAt: (updates[0] as { completedAt: Date }).completedAt, foldersProcessed: 0, messagesAdded: 0, messagesUpdated: 0, errorCode: 'MAIL_CREDENTIAL_NOT_CONFIGURED', errorMessage: 'mail credential not configured' });
 });
@@ -132,7 +133,8 @@ test('auth failure is normalized and not retried; temporary timeout is retryable
   const key = randomBytes(32);
   const credential = { username: 'test', ...encryptSecret('secret', key) };
   const updates: Array<{ data: { errorCode?: string; status?: string } }> = [];
-  const db = { mailbox: { findUnique: async () => ({ isActive: true, status: 'UNKNOWN', credential, mailServer: { status: 'ACTIVE', imapHost: 'mail.test', imapPort: 993, imapSecurity: 'TLS' } }) }, mailSyncRun: { create: async () => ({ id: 'run' }), update: async (args: { data: { errorCode?: string; status?: string } }) => { updates.push(args); } } } as unknown as PrismaClient;
+  const dbData = { mailbox: { findUnique: async () => ({ isActive: true, status: 'UNKNOWN', credential, mailServer: { status: 'ACTIVE', imapHost: 'mail.test', imapPort: 993, imapSecurity: 'TLS' } }) }, mailSyncRun: { create: async () => ({ id: 'run' }), update: async (args: { data: { errorCode?: string; status?: string } }) => { updates.push(args); } } };
+  const db = { ...dbData, $transaction: async (work: (tx: typeof dbData) => Promise<void>) => work(dbData) } as unknown as PrismaClient;
   const client = { on() { return this; }, connect: async () => { throw { code: 'EAUTH', message: 'private diagnostic' }; }, usable: false, close() {} };
   await processMailboxSync(db, config, key, logger, 'box', new AbortController().signal, (() => client) as never);
   assert.equal(updates[0]?.data.errorCode, 'IMAP_AUTH_FAILED');
