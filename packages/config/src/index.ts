@@ -2,13 +2,15 @@ import { z } from 'zod';
 
 const schema = z.object({
   NODE_ENV: z.enum(['development', 'test', 'production']).default('development'),
-  DATABASE_URL: z.string().url(),
-  REDIS_URL: z.string().url(),
+  DATABASE_URL: z.string().url().refine(value => ['postgres:', 'postgresql:'].includes(new URL(value).protocol), 'Must use PostgreSQL'),
+  REDIS_URL: z.string().url().refine(value => ['redis:', 'rediss:'].includes(new URL(value).protocol), 'Must use Redis'),
   JWT_SECRET: z.string().min(32),
   WEB_URL: z.string().url(),
   API_URL: z.string().url(),
+  UNI_MAIL_HUB_PUBLIC_URL: z.string().url().optional(),
+  ALLOWED_ORIGINS: z.string().optional(),
   API_PORT: z.coerce.number().int().positive().default(4000),
-  MAIL_CREDENTIAL_ENCRYPTION_KEY: z.string().refine((value) => /^[A-Za-z0-9+/]{43}=$/.test(value) && Buffer.from(value, 'base64').length === 32, 'Must be a Base64-encoded 32-byte key'),
+  MAIL_CREDENTIAL_ENCRYPTION_KEY: z.string().refine((value) => /^[A-Za-z0-9+/]{43}=$/.test(value) && Buffer.from(value, 'base64').length === 32 && Buffer.from(value, 'base64').toString('base64') === value, 'Must be a Base64-encoded 32-byte key'),
   MAIL_API_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(10000).default(60),
   MAIL_API_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(3600).default(60),
   MAIL_SEND_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(4),
@@ -43,8 +45,20 @@ export function readConfig() {
   if (!result.success) {
     throw new Error(`Invalid environment configuration: ${result.error.issues.map((issue) => issue.path.join('.')).join(', ')}`);
   }
-  if (result.data.NODE_ENV === 'production' && result.data.JWT_SECRET.includes('replace-with')) {
-    throw new Error('JWT_SECRET must be replaced in production.');
+  if (result.data.NODE_ENV === 'production') {
+    const issues: string[] = [];
+    const { JWT_SECRET, WEB_URL, API_URL, UNI_MAIL_HUB_PUBLIC_URL, ALLOWED_ORIGINS } = result.data;
+    if (!process.env.NODE_ENV) issues.push('NODE_ENV');
+    if (JWT_SECRET.length < 48 || /replace|change|example|secret|password|test|dev/i.test(JWT_SECRET) || new Set(JWT_SECRET).size < 16 || JWT_SECRET === process.env.SEED_ADMIN_PASSWORD) issues.push('JWT_SECRET');
+    const safeBase = (value: string) => { const url = new URL(value); return !url.username && !url.password && !url.search && !url.hash && url.pathname === '/'; };
+    const loopback = (value: string) => ['localhost', '127.0.0.1', '[::1]'].includes(new URL(value).hostname);
+    if (new URL(WEB_URL).protocol !== 'https:' || loopback(WEB_URL) || !safeBase(WEB_URL)) issues.push('WEB_URL');
+    if (!UNI_MAIL_HUB_PUBLIC_URL || new URL(UNI_MAIL_HUB_PUBLIC_URL).protocol !== 'https:' || loopback(UNI_MAIL_HUB_PUBLIC_URL) || !safeBase(UNI_MAIL_HUB_PUBLIC_URL)) issues.push('UNI_MAIL_HUB_PUBLIC_URL');
+    const internalApi = loopback(API_URL);
+    if (new URL(API_URL).protocol !== 'https:' && !(internalApi && new URL(API_URL).protocol === 'http:') || !safeBase(API_URL)) issues.push('API_URL');
+    if (!ALLOWED_ORIGINS || !ALLOWED_ORIGINS.split(',').every(origin => { try { return new URL(origin.trim()).origin === origin.trim() && new URL(origin.trim()).protocol === 'https:'; } catch { return false; } })) issues.push('ALLOWED_ORIGINS');
+    if (ALLOWED_ORIGINS && !ALLOWED_ORIGINS.split(',').map(value => value.trim()).includes(new URL(WEB_URL).origin)) issues.push('ALLOWED_ORIGINS');
+    if (issues.length) throw new Error('Invalid production environment configuration: ' + [...new Set(issues)].join(', '));
   }
   return result.data;
 }

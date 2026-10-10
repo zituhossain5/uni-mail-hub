@@ -5,6 +5,7 @@ import { CpanelClient, classifyCpanelError, normalizeEmail, validateCpanelHost }
 import { decodeEncryptionKey, decryptSecret, encryptSecret } from '@uni/security';
 import Redis from 'ioredis';
 import { z } from 'zod';
+import { Throttle } from '@nestjs/throttler';
 import { AuthedRequest, Database, SuperAdmin, parse, requestLogger } from './core';
 
 const id = z.string().cuid();
@@ -94,6 +95,7 @@ export class CpanelController {
     return { removed: true };
   }
   @Post(':id/test-connection')
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @HttpCode(200)
   async testConnection(@Param('id') rawId: string, @Req() request: AuthedRequest) {
     const account = await this.account(rawId);

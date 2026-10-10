@@ -16,7 +16,7 @@ from uni_mail import (
 BASE = "http://127.0.0.1:4000"
 MAILBOX = "cm12345678901234567890123"
 MESSAGE = "cm12345678901234567890124"
-SECRET = "umh_test_test-secret-should-never-appear"
+SECRET = "synthetic-test-api-key"
 
 
 def client(handler):

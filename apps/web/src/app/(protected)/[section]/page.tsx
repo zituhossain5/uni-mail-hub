@@ -8,6 +8,7 @@ import { Webmail } from '@/components/webmail';
 import { MailExplorer } from '@/components/mail-explorer';
 import { CpanelAccounts } from '@/components/cpanel-accounts';
 import { Monitoring } from '@/components/monitoring';
+import { SecuritySettings } from '@/components/security-settings';
 import { Suspense } from 'react';
 
 export default async function SectionPage({ params, searchParams }: { params: Promise<{ section: string }>; searchParams: Promise<{ mailbox?: string }> }) {
@@ -22,6 +23,7 @@ export default async function SectionPage({ params, searchParams }: { params: Pr
   if (['unified', 'search', 'unread', 'flagged', 'attachments'].includes(section)) return <Suspense fallback={<div className="webmail-skeleton" role="status">Loading mail…</div>}><MailExplorer view={section as 'unified' | 'search' | 'unread' | 'flagged' | 'attachments'}/></Suspense>;
   const mailFolders = { inbox: 'INBOX', sent: 'SENT', drafts: 'DRAFTS', spam: 'JUNK', trash: 'TRASH', archive: 'ARCHIVE' } as const;
   if (section in mailFolders) return <Webmail specialUse={mailFolders[section as keyof typeof mailFolders]} initialMailboxId={mailbox}/>;
-  if (['templates','logs','settings'].includes(section)) return <Placeholder section={section}/>;
+  if (section === 'settings') return <SecuritySettings/>;
+  if (['templates','logs'].includes(section)) return <Placeholder section={section}/>;
   notFound();
 }

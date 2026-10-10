@@ -11,7 +11,7 @@ Use the direct API endpoint for application traffic. The browser web app uses a 
 ## Submit a message
 
 ```powershell
-$apiKey = 'umh_test_REPLACE_WITH_THE_KEY_COPIED_ONCE'
+$apiKey = 'REPLACE_WITH_NEW_API_KEY'
 $mailboxId = 'REPLACE_WITH_MAILBOX_ID'
 $idempotencyKey = [guid]::NewGuid().ToString()
 $body = @{

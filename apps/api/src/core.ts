@@ -23,7 +23,7 @@ export class RedisConnection implements OnModuleInit, OnModuleDestroy {
   async onModuleDestroy() { this.client.disconnect(); }
 }
 
-export type AuthUser = { id: string; role: UserRole; email: string; name: string };
+export type AuthUser = { id: string; role: UserRole; email: string; name: string; sessionId: string };
 export type AuthedRequest = Request & { user: AuthUser };
 
 @Injectable()
@@ -35,11 +35,15 @@ export class AuthGuard implements CanActivate {
     const token = request.headers.authorization?.match(/^Bearer (.+)$/)?.[1];
     if (!token) throw new UnauthorizedException();
     try {
-      const payload = await this.jwt.verifyAsync<{ sub: string }>(token);
+      const payload = await this.jwt.verifyAsync<{ sub: string; sid: string }>(token);
+      if (!payload.sub || !payload.sid) throw new UnauthorizedException();
+      const session = await this.db.userSession.findUnique({ where: { id: payload.sid }, select: { userId: true, expiresAt: true, revokedAt: true, lastUsedAt: true } });
+      if (!session || session.userId !== payload.sub || session.revokedAt || session.expiresAt <= new Date()) throw new UnauthorizedException();
       const user = await this.db.user.findUnique({ where: { id: payload.sub }, select: { id: true, role: true, email: true, name: true, isActive: true } });
       if (!user?.isActive) throw new UnauthorizedException();
       if (this.reflector.getAllAndOverride<boolean>('superAdmin', [context.getHandler(), context.getClass()]) && user.role !== UserRole.SUPER_ADMIN) throw new ForbiddenException();
-      request.user = { id: user.id, role: user.role, email: user.email, name: user.name };
+      request.user = { id: user.id, role: user.role, email: user.email, name: user.name, sessionId: payload.sid };
+      if (Date.now() - session.lastUsedAt.getTime() > 60_000) await this.db.userSession.updateMany({ where: { id: payload.sid, revokedAt: null }, data: { lastUsedAt: new Date() } });
       return true;
     } catch (error) {
       if (error instanceof ForbiddenException) throw error;
@@ -64,6 +68,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
     if (exception instanceof HttpException) {
       status = exception.getStatus();
       code = HttpStatus[status] ?? 'HTTP_ERROR';
+      if (status === 429) code = 'RATE_LIMIT_EXCEEDED';
       const body = exception.getResponse();
       if (typeof body === 'object' && body !== null) {
         const data = body as Record<string, unknown>;
@@ -81,7 +86,7 @@ export class ApiExceptionFilter implements ExceptionFilter {
   }
 }
 
-const logger = pino({ redact: ['req.headers.authorization', 'req.headers.cookie', 'headers.authorization', 'password', 'encryptedPassword', 'encryptedApiToken', 'apiToken', 'secret', 'apiKey', 'token', 'keyHash', 'MAIL_CREDENTIAL_ENCRYPTION_KEY'], level: process.env.NODE_ENV === 'production' ? 'info' : 'debug' });
+const logger = pino({ redact: { paths: ['req.headers.authorization', 'req.headers.cookie', 'res.headers.set-cookie', 'headers.authorization', 'headers.cookie', 'headers.set-cookie', '*.authorization', '*.cookie', '*.password', '*.apiKey', '*.apiToken', '*.token', '*.secret', 'password', 'encryptedPassword', 'encryptedApiToken', 'apiToken', 'secret', 'apiKey', 'token', 'keyHash', 'MAIL_CREDENTIAL_ENCRYPTION_KEY'], censor: '[REDACTED]' }, level: process.env.NODE_ENV === 'production' ? 'info' : 'debug' });
 export class JsonLogger implements LoggerService {
   log(message: unknown, context?: string) { logger.info({ context }, String(message)); }
   error(message: unknown, trace?: string, context?: string) { logger.error({ context, ...(process.env.NODE_ENV === 'production' ? {} : { trace }) }, String(message)); }

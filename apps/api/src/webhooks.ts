@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Header, HttpCode, HttpException, Inject, Param, Patch, Post, Req } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
+import { Throttle } from '@nestjs/throttler';
 import { readConfig } from '@uni/config';
 import { encryptSecret, decodeEncryptionKey, generateWebhookSecret } from '@uni/security';
 import { resolveWebhookTarget, webhookEventTypes } from '@uni/mail';
@@ -79,7 +80,7 @@ export class WebhooksController {
     return { secret };
   }
 
-  @Post(':endpointId/test') async test(@Param('projectId') raw: string, @Param('endpointId') endpointRaw: string, @Req() request: AuthedRequest) {
+  @Post(':endpointId/test') @Throttle({ default: { limit: 5, ttl: 60_000 } }) async test(@Param('projectId') raw: string, @Param('endpointId') endpointRaw: string, @Req() request: AuthedRequest) {
     const projectId = await this.project(raw);
     const endpoint = await this.endpoint(projectId, endpointRaw);
     if (endpoint.status !== 'ACTIVE') throw problem('WEBHOOK_ENDPOINT_DISABLED', 'Enable the endpoint before sending a test', 409);
@@ -97,7 +98,7 @@ export class WebhooksController {
     return this.db.webhookDelivery.findMany({ where: { endpoint: { projectId } }, select: { id: true, eventId: true, endpointId: true, replayOfId: true, status: true, attemptCount: true, httpStatus: true, responseSnippet: true, durationMs: true, nextAttemptAt: true, firstAttemptAt: true, lastAttemptAt: true, deliveredAt: true, errorCode: true, errorMessage: true, createdAt: true, event: { select: { type: true, resourceType: true, resourceId: true, payload: true, createdAt: true } }, endpoint: { select: { name: true } } }, orderBy: { createdAt: 'desc' }, take: 100 });
   }
 
-  @Post('deliveries/:deliveryId/replay') async replay(@Param('projectId') raw: string, @Param('deliveryId') deliveryRaw: string, @Req() request: AuthedRequest) {
+  @Post('deliveries/:deliveryId/replay') @Throttle({ default: { limit: 5, ttl: 60_000 } }) async replay(@Param('projectId') raw: string, @Param('deliveryId') deliveryRaw: string, @Req() request: AuthedRequest) {
     const projectId = await this.project(raw);
     const previous = await this.db.webhookDelivery.findFirst({ where: { id: parse(id, deliveryRaw), endpoint: { projectId } }, include: { endpoint: true, event: true } });
     if (!previous) throw problem('WEBHOOK_DELIVERY_NOT_FOUND', 'Delivery not found', 404);

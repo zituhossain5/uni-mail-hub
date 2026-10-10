@@ -155,7 +155,7 @@ test('account create encrypts token, omits token from API result and audit; repl
 });
 
 test('super-admin guard denies other roles', async () => {
-  const guard = new AuthGuard({ getAllAndOverride: (key: string) => key === 'superAdmin' } as never, { verifyAsync: async () => ({ sub: 'member' }) } as never, { user: { findUnique: async () => ({ id: 'member', role: 'MEMBER', email: 'm@example.test', name: 'Member', isActive: true }) } } as never);
+  const guard = new AuthGuard({ getAllAndOverride: (key: string) => key === 'superAdmin' } as never, { verifyAsync: async () => ({ sub: 'member', sid: 'session' }) } as never, { userSession: { findUnique: async () => ({ userId: 'member', revokedAt: null, expiresAt: new Date(Date.now() + 60_000), lastUsedAt: new Date() }) }, user: { findUnique: async () => ({ id: 'member', role: 'MEMBER', email: 'm@example.test', name: 'Member', isActive: true }) } } as never);
   const context = { getHandler: () => null, getClass: () => null, switchToHttp: () => ({ getRequest: () => ({ headers: { authorization: 'Bearer test' } }) }) };
   await assert.rejects(guard.canActivate(context as never), { status: 403 });
 });

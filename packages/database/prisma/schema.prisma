@@ -80,6 +80,48 @@ model User {
   auditLogs    AuditLog[]
   createdApiKeys ApiKey[] @relation("ApiKeyCreator")
   composedMessages OutgoingMessage[] @relation("WebmailComposeCreator")
+  sessions UserSession[]
+  security UserSecurity?
+  recoveryCodes RecoveryCode[]
+}
+
+model UserSession {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  lastUsedAt DateTime @default(now())
+  expiresAt DateTime
+  revokedAt DateTime?
+  ipAddress String?
+  userAgent String?
+
+  @@index([userId, revokedAt, expiresAt])
+}
+
+model UserSecurity {
+  userId String @id
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  totpSecretCiphertext String?
+  totpSecretIv String?
+  totpSecretTag String?
+  pendingTotpCiphertext String?
+  pendingTotpIv String?
+  pendingTotpTag String?
+  pendingTotpExpiresAt DateTime?
+  totpEnabledAt DateTime?
+  lastTotpStep Int?
+  updatedAt DateTime @updatedAt
+}
+
+model RecoveryCode {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  codeHash String
+  createdAt DateTime @default(now())
+
+  @@unique([userId, codeHash])
 }
 
 model Project {

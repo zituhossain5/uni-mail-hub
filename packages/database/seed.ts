@@ -11,10 +11,14 @@ async function seed() {
   const prisma = new PrismaClient();
   try {
     const passwordHash = await argon2.hash(password!);
-    await prisma.user.upsert({
-      where: { email: email! },
-      create: { name: name!, email: email!, passwordHash, role: UserRole.SUPER_ADMIN },
-      update: { name: name!, passwordHash, role: UserRole.SUPER_ADMIN, isActive: true },
+    await prisma.$transaction(async tx => {
+      const user = await tx.user.upsert({
+        where: { email: email! },
+        create: { name: name!, email: email!, passwordHash, role: UserRole.SUPER_ADMIN },
+        update: { name: name!, passwordHash, role: UserRole.SUPER_ADMIN, isActive: true },
+      });
+      await tx.userSession.updateMany({ where: { userId: user.id, revokedAt: null }, data: { revokedAt: new Date() } });
+      await tx.auditLog.create({ data: { userId: user.id, action: 'ADMIN_PASSWORD_SEEDED', entityType: 'User', entityId: user.id } });
     });
     console.log(`Seeded SUPER_ADMIN: ${email}`);
   } finally {

@@ -3,6 +3,7 @@ import { credentialSchema } from '@uni/shared';
 import { ConnectionResult, Protocol, testImap, testSmtp } from '@uni/mail';
 import { decodeEncryptionKey, decryptSecret, encryptSecret } from '@uni/security';
 import { z } from 'zod';
+import { Throttle } from '@nestjs/throttler';
 import { AuthedRequest, Database, SuperAdmin, parse } from './core';
 
 const idSchema = z.string().cuid();
@@ -24,7 +25,7 @@ export class MailConnectivityController {
     const credential = mailbox.credential;
     return { mailboxId: mailbox.id, configured: !!credential, username: credential?.username ?? null, updatedAt: credential?.updatedAt ?? null, lastRotatedAt: credential?.lastRotatedAt ?? null };
   }
-  @Put('credentials') async putCredential(@Param('id') id: string, @Body() body: unknown, @Req() request: AuthedRequest) {
+  @Put('credentials') @Throttle({ default: { limit: 5, ttl: 60_000 } }) async putCredential(@Param('id') id: string, @Body() body: unknown, @Req() request: AuthedRequest) {
     const mailbox = await this.mailbox(id);
     const { username, password } = parse(credentialSchema, body);
     const encrypted = encryptSecret(password, this.key);
@@ -50,9 +51,9 @@ export class MailConnectivityController {
     const mailbox = await this.mailbox(id);
     return this.db.mailboxConnectionCheck.findMany({ where: { mailboxId: mailbox.id }, orderBy: { testedAt: 'desc' }, take: 50 });
   }
-  @Post('test-imap') testImap(@Param('id') id: string, @Req() request: AuthedRequest) { return this.run(id, ['IMAP'], request); }
-  @Post('test-smtp') testSmtp(@Param('id') id: string, @Req() request: AuthedRequest) { return this.run(id, ['SMTP'], request); }
-  @Post('test-connection') testBoth(@Param('id') id: string, @Req() request: AuthedRequest) { return this.run(id, ['IMAP', 'SMTP'], request); }
+  @Post('test-imap') @Throttle({ default: { limit: 5, ttl: 60_000 } }) testImap(@Param('id') id: string, @Req() request: AuthedRequest) { return this.run(id, ['IMAP'], request); }
+  @Post('test-smtp') @Throttle({ default: { limit: 5, ttl: 60_000 } }) testSmtp(@Param('id') id: string, @Req() request: AuthedRequest) { return this.run(id, ['SMTP'], request); }
+  @Post('test-connection') @Throttle({ default: { limit: 5, ttl: 60_000 } }) testBoth(@Param('id') id: string, @Req() request: AuthedRequest) { return this.run(id, ['IMAP', 'SMTP'], request); }
 
   private async run(rawId: string, protocols: Protocol[], request: AuthedRequest) {
     const mailbox = await this.mailbox(rawId);

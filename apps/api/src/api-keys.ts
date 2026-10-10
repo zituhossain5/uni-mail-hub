@@ -2,6 +2,7 @@ import { Body, Controller, Get, HttpException, Inject, Param, Patch, Post, Req }
 import { apiKeyCreateSchema } from '@uni/shared';
 import { generateApiKey } from '@uni/security';
 import { z } from 'zod';
+import { Throttle } from '@nestjs/throttler';
 import { AuthedRequest, Database, SuperAdmin, parse } from './core';
 
 const idSchema = z.string().cuid();
@@ -19,7 +20,7 @@ export class ApiKeysController {
     if (!item) throw new HttpException({ code: 'API_KEY_NOT_FOUND', message: 'API key not found' }, 404);
     return item;
   }
-  @Post() async create(@Body() body: unknown, @Req() request: AuthedRequest) {
+  @Post() @Throttle({ default: { limit: 10, ttl: 60_000 } }) async create(@Body() body: unknown, @Req() request: AuthedRequest) {
     const input = parse(apiKeyCreateSchema, body);
     const project = await this.db.project.findUnique({ where: { id: input.projectId } });
     if (!project) throw new HttpException({ code: 'PROJECT_NOT_FOUND', message: 'Project not found' }, 404);

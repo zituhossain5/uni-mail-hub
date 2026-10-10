@@ -10,3 +10,12 @@ coverage/
 *.log
 packages/database/generated/
 /.local-backups/
+*.dump
+*.sql.gz
+*.backup
+*.bak
+*.pem
+*.key
+*.p12
+*.pfx
+access.txt

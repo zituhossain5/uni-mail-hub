@@ -1,6 +1,8 @@
 packages:
   - apps/*
   - packages/*
+overrides:
+  shell-quote: ^1.11.0
 allowBuilds:
   '@prisma/client': true
   '@prisma/engines': true

@@ -9,6 +9,7 @@ import { hashApiKey } from '@uni/security';
 import { forwardedBlock, replyRecipients, responseHeaders, responseSubject } from '@uni/mail';
 import { sendMessageSchema } from '@uni/shared';
 import { z } from 'zod';
+import { Throttle } from '@nestjs/throttler';
 import { AuthedRequest, Database, Public, RedisConnection, SuperAdmin, parse } from './core';
 import { safeForwardText } from './webmail-html';
 
@@ -122,7 +123,7 @@ export class ClientMessagesController {
 export class AdminComposeController {
   constructor(@Inject(Database) private readonly db: Database, @Inject(MailQueue) private readonly queue: MailQueue) {}
 
-  @Post() @HttpCode(202)
+  @Post() @HttpCode(202) @Throttle({ default: { limit: 30, ttl: 60_000 } })
   async submit(@Body() body: unknown, @Headers('idempotency-key') idempotencyKey: string | undefined, @Req() request: AuthedRequest) {
     return this.submitPrepared(parse(sendMessageSchema, body), idempotencyKey, request);
   }
