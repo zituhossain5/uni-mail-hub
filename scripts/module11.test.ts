@@ -276,9 +276,10 @@ test('integration examples use the Sending API and contain no real keys or SMTP 
     assert.doesNotMatch(example, /SMTP_PASSWORD|umh_(?:test|live)_[A-Za-z0-9_-]{20}/, name);
   }
   for (const name of ['Python', 'FastAPI', 'Django', 'Flask']) {
-    assert.match(integrationExamples[name]!, /UniMail\.from_env\(\)/, name);
+    assert.match(integrationExamples[name]!, /httpx\.(?:post|AsyncClient)/, name);
     assert.match(integrationExamples[name]!, /UNI_MAIL_HUB_API_KEY/, name);
     assert.match(integrationExamples[name]!, /UNI_MAIL_HUB_MAILBOX_ID/, name);
+    assert.doesNotMatch(integrationExamples[name]!, /from uni_mail import/, name);
   }
 });
 

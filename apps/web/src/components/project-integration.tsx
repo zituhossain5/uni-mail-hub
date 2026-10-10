@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { Copy, KeyRound, MailPlus, RefreshCw } from 'lucide-react';
 import { Dialog } from './dialog';
 import { StatusBadge } from './ui';
-import { integrationExamples } from '@/lib/integration-examples';
+import { IntegrationGuide, type IntegrationSection } from './integration-guide';
 
 type Domain = { id: string; domain: string };
 type Mailbox = { id: string; email: string; status: string };
@@ -48,7 +48,7 @@ export function ProjectIntegration({ projectId, publicBaseUrl, environment }: { 
   const [mailServerId, setMailServerId] = useState('');
   const [mailHost, setMailHost] = useState('');
   const [localPart, setLocalPart] = useState('');
-  const [example, setExample] = useState('Node.js');
+  const [guideSection, setGuideSection] = useState<IntegrationSection>('Overview');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -118,14 +118,15 @@ export function ProjectIntegration({ projectId, publicBaseUrl, environment }: { 
       setNotice('Application credential created. Copy the key and configuration now; the key cannot be retrieved later.');
     });
   }
-  async function copy(value: string, audit = false) {
+  async function copy(value: string, audit = false): Promise<boolean> {
     try { await navigator.clipboard.writeText(value); }
-    catch { setError('Copy failed. Select and copy the text manually.'); return; }
+    catch { setError('Copy failed. Select and copy the text manually.'); return false; }
     setNotice('Copied to clipboard.');
     if (audit && selectedKeyId && senderId) {
       try { await api(`projects/${projectId}/integration/config-generated`, { method: 'POST', body: JSON.stringify({ apiKeyId: selectedKeyId, mailboxId: senderId }) }); }
       catch { setError('Configuration copied, but the audit event could not be recorded.'); }
     }
+    return true;
   }
   function openConfirm(next: Confirm) { setTypedEmail(''); setReviewedRemote(false); setConfirm(next); setError(''); }
   async function confirmedAction() {
@@ -159,6 +160,8 @@ export function ProjectIntegration({ projectId, publicBaseUrl, environment }: { 
   return <div className="integration-page">
     <div className="integration-intro"><div><span className="eyebrow">DEVELOPER ONBOARDING</span><h2>Connect {project.name} to Uni Mail Hub</h2><p>Create a sender and project credential, then copy the HTTP integration settings into your application.</p></div><span className="integration-env">{environment}</span></div>
     {error && <p className="form-error" role="alert">{error}</p>}{notice && <p className="notice-success" role="status">{notice}</p>}
+    <IntegrationGuide section={guideSection} onSectionChange={setGuideSection} projectId={projectId} publicBaseUrl={publicBaseUrl} hasCredential={activeKeys.length > 0} senderGranted={keyGrantsSender} senderEmail={sender?.email ?? null} mailboxId={sender?.id ?? null} copy={value => copy(value)}/>
+    {guideSection === 'Quick Start' && <><div className="integration-guide-alert"><strong>Environment variables alone are not enough.</strong> Your application backend must call the Uni Mail Hub REST API. No Uni Mail Hub package is required.</div>
     <div className="integration-steps">
       <section className="panel integration-card"><div className="integration-step"><span>1</span><div><h3>Project and domain</h3><p>{project.name} · Choose a domain owned by this project.</p></div></div>
         <div className="entity-form"><label>Domain<select value={domainId} onChange={event => setDomainId(event.target.value)}><option value="">Select domain</option>{project.domains.map(item => <option key={item.id} value={item.id}>{item.domain}</option>)}</select></label></div>
@@ -185,16 +188,12 @@ export function ProjectIntegration({ projectId, publicBaseUrl, environment }: { 
         {replacementOf && rawAvailable && <button type="button" className="ghost-button danger-text" onClick={() => openConfirm({ kind: 'revoke', email: sender?.email ?? '', keyId: replacementOf })}>Revoke old key after your application uses the replacement</button>}
       </section>
       <section className="panel integration-card"><div className="integration-step"><span>4</span><div><h3>Application configuration</h3><p>API endpoint: <code>{publicBaseUrl ? `${publicBaseUrl}/api/v1/messages` : 'Configure UNI_MAIL_HUB_PUBLIC_URL'}</code></p></div></div>
-        {!rawAvailable && <p className="form-note">Create a new API key to generate a complete environment snippet. Existing raw keys cannot be retrieved.</p>}
+        {!rawAvailable && <p className="form-note">The existing API key cannot be displayed again. Create a replacement application credential if you need a new secret and a complete environment snippet.</p>}
         {!publicBaseUrl && <p className="form-error">Set UNI_MAIL_HUB_PUBLIC_URL on the web server before copying production configuration.</p>}
         <div className="integration-code"><pre>{snippet}</pre><button type="button" className="secondary-button" disabled={!rawAvailable || !sender || !keyGrantsSender || !publicBaseUrl} onClick={() => void copy(snippet, true)}><Copy size={15}/>Copy environment</button></div>
         {rawAvailable && <button type="button" className="ghost-button" onClick={() => { setRawKey(''); setRawKeyId(''); }}>Clear one-time key from page</button>}
-        <p className="form-note">Store these values only in your application’s server environment. Your application no longer needs SMTP_HOST, SMTP_PORT, SMTP_USERNAME, or SMTP_PASSWORD.</p>
+        <p className="form-note">UNI_MAIL_HUB_URL is the API base URL; UNI_MAIL_HUB_API_KEY is this project’s application credential; UNI_MAIL_HUB_MAILBOX_ID is the granted sender. Store all three only in your application’s server environment. Never put the key in NEXT_PUBLIC_ variables, browser or mobile code, commit .env, or log Authorization. Your application does not need SMTP_HOST, SMTP_PORT, SMTP_USERNAME, or SMTP_PASSWORD.</p>
         <p className="form-note">Webhooks: {webhooks.length ? webhooks.map(item => `${item.name} (${item.status})`).join(', ') : 'None configured'}. <Link href={`/projects/${projectId}?tab=Webhooks`}>Manage webhooks</Link>.</p>
-      </section>
-      <section className="panel integration-card"><div className="integration-step"><span>5</span><div><h3>Integration examples</h3><p>All examples send through POST /api/v1/messages with Bearer authentication, an idempotency key, and JSON.</p></div></div>
-        <div className="integration-inline"><label>Platform<select value={example} onChange={event => setExample(event.target.value)}>{Object.keys(integrationExamples).map(name => <option key={name}>{name}</option>)}</select></label><button type="button" className="secondary-button" onClick={() => void copy(integrationExamples[example] ?? '')}><Copy size={15}/>Copy example</button></div>
-        <div className="integration-code"><pre>{integrationExamples[example]}</pre></div>
       </section>
     </div>
     {sender && <section className="panel integration-card"><div className="integration-step"><span><RefreshCw size={16}/></span><div><h3>Manage {sender.email}</h3><p>Mailbox ID: <code>{sender.id}</code> · <StatusBadge status={sender.status}/></p></div></div>
@@ -203,7 +202,7 @@ export function ProjectIntegration({ projectId, publicBaseUrl, environment }: { 
         <form className="entity-form integration-inline" onSubmit={event => void changeQuota(event)}><label>Change quota<select value={quotaMode} onChange={event => setQuotaMode(event.target.value as 'FINITE' | 'UNLIMITED')}><option value="FINITE">Finite (MB)</option><option value="UNLIMITED">Unlimited</option></select></label>{quotaMode === 'FINITE' && <label>MB<input type="number" min="1" max="1048576" value={quotaMb} onChange={event => setQuotaMb(event.target.value)} required/></label>}<button className="secondary-button" disabled={!!busy}>Save quota</button></form></>}
     </section>}
     {unresolved.length > 0 && <section className="panel integration-card"><h3>Credential recovery required</h3><p className="form-error">A cPanel change is unresolved. Do not retry provisioning or rotation until it is reconciled.</p>{unresolved.map(item => <div className="integration-recovery" key={item.id}><strong>{item.email}</strong><span>{item.action} · {item.status} · {item.errorCode ?? 'Outcome uncertain'}</span><button className="secondary-button" onClick={() => openConfirm({ kind: 'recover', email: item.email, changeId: item.id })}>Recover</button>{item.action === 'CREATE' && item.errorCode !== 'CPANEL_VAULT_UPDATE_FAILED' && <button className="ghost-button" onClick={() => openConfirm({ kind: 'abandon', email: item.email, changeId: item.id })}>Abandon if absent</button>}</div>)}</section>}
-    <section className="panel integration-card"><h3>Moving an existing application</h3><ol className="integration-checklist"><li>Import or discover its mailbox.</li><li>Enter the known password or explicitly rotate it. Rotation may break mail clients, phones, Outlook, Thunderbird, and websites still using the old password.</li><li>Test IMAP and SMTP, then sync.</li><li>Create a project credential and grant only the required senders.</li><li>Replace SMTP settings in your application with the three Uni Mail Hub environment values above.</li><li>Test a send, then remove old SMTP secrets from the application.</li></ol><p className="form-note">Webhooks can be configured on the <Link href={`/projects/${projectId}?tab=Webhooks`}>Webhooks tab</Link>. No webhook secret is included in this snippet.</p></section>
+    </>}
     <Dialog open={!!confirm} title={confirm?.kind === 'delete' ? 'Delete mailbox from cPanel?' : confirm?.kind === 'rotate' ? 'Rotate mailbox password?' : confirm?.kind === 'revoke' ? 'Revoke old API key?' : confirm?.kind === 'recover' ? 'Recover credential?' : confirm?.kind === 'abandon' ? 'Abandon unconfirmed change?' : 'Change mailbox suspension?'} description={confirm?.kind === 'delete' ? 'cPanel mailbox data may be permanently lost. Uni Mail Hub historical records will remain disabled.' : confirm?.kind === 'rotate' ? 'Changing this password may break existing applications, mail clients, phones, Outlook, Thunderbird, and websites using the old password.' : confirm?.kind === 'recover' ? 'This may reapply the escrowed password in cPanel and update the local encrypted vault.' : 'Confirm this sensitive action.'} onClose={() => setConfirm(null)} footer={<><button className="secondary-button" onClick={() => setConfirm(null)} disabled={!!busy}>Cancel</button><button className={confirm?.kind === 'delete' || confirm?.kind === 'revoke' ? 'danger-button' : 'primary-button'} disabled={!!busy || typedEmail !== confirm?.email || (confirm?.kind === 'recover' && !reviewedRemote)} onClick={() => void confirmedAction()}>Confirm {confirm?.kind}</button></>}><label className="integration-confirm">Type <strong>{confirm?.email}</strong> to confirm<input value={typedEmail} onChange={event => setTypedEmail(event.target.value)} autoComplete="off"/></label>{confirm?.kind === 'recover' && <label className="integration-remote-confirm"><input type="checkbox" checked={reviewedRemote} onChange={event => setReviewedRemote(event.target.checked)}/>I inspected cPanel and confirmed this exact mailbox belongs to the selected account.</label>}{error && <p className="form-error" role="alert">{error}</p>}</Dialog>
   </div>;
 }
