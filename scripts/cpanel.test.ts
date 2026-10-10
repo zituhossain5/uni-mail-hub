@@ -67,6 +67,69 @@ const serverId = 'c123456789012345678901237';
 const request = { user: { id: 'admin' }, ip: '127.0.0.1' };
 function accountFixture() { return { id: accountId, name: 'Test', host: 'cpanel.example.test', port: 2083, username: 'cpuser', status: 'ACTIVE', connectionStatus: 'UNTESTED' }; }
 
+test('discovery mailbox listing filters before pagination, clamps pages, and preserves the legacy response', async () => {
+  const rows = Array.from({ length: 35 }, (_, index) => ({
+    id: 'mailbox-' + index,
+    accountId,
+    email: (index < 24 ? 'contact' : 'other') + String(index).padStart(2, '0') + '@example.test',
+    state: index < 24 ? 'DISCOVERED' : index < 30 ? 'MANAGED' : 'MISSING',
+    usedBytes: 50n,
+    quotaBytes: 100n,
+    managedMailbox: null,
+  }));
+  let requestedSkip = -1;
+  let requestedTake: number | undefined;
+  const matching = (where: { state?: string; email?: { contains: string } }) => rows.filter(row =>
+    (!where.state || row.state === where.state) && (!where.email || row.email.includes(where.email.contains.toLowerCase())));
+  const db = {
+    cpanelAccount: { findUnique: async () => accountFixture() },
+    cpanelDiscoveredDomain: { findMany: async () => [] },
+    cpanelDiscoveredForwarder: { findMany: async () => [] },
+    cpanelDiscoveryRun: { findMany: async () => [] },
+    cpanelDiscoveredMailbox: {
+      count: async ({ where }: { where: { state?: string; email?: { contains: string } } }) => matching(where).length,
+      groupBy: async () => [
+        { state: 'DISCOVERED', _count: { _all: 24 } },
+        { state: 'MANAGED', _count: { _all: 6 } },
+        { state: 'MISSING', _count: { _all: 5 } },
+      ],
+      findMany: async ({ where, skip = 0, take }: { where: { state?: string; email?: { contains: string } }; skip?: number; take?: number }) => {
+        requestedSkip = skip; requestedTake = take;
+        return matching(where).slice(skip, take === undefined ? undefined : skip + take);
+      },
+    },
+  };
+  const controller = new CpanelController(db as never, {} as never);
+  const listed = await controller.discovery(accountId, { page: '2', pageSize: '20', search: 'contact', status: 'NEW' });
+  assert.equal(listed.mailboxes.length, 4);
+  assert.deepEqual(listed.pagination, { page: 2, pageSize: 20, totalItems: 24, totalPages: 2 });
+  assert.deepEqual(listed.summary, { mailboxes: 35, missing: 5 });
+  assert.equal(requestedSkip, 20);
+  assert.equal(requestedTake, 20);
+  assert(listed.mailboxes.every(row => row.state === 'DISCOVERED' && row.email.includes('contact')));
+  const ten = await controller.discovery(accountId, { pageSize: '10' });
+  assert.equal(ten.mailboxes.length, 10);
+  assert.equal(ten.pagination?.totalPages, 4);
+  const hundred = await controller.discovery(accountId, { pageSize: '100' });
+  assert.equal(hundred.mailboxes.length, 35);
+  assert.equal(hundred.pagination?.totalPages, 1);
+  const clamped = await controller.discovery(accountId, { page: '9', pageSize: '20', search: 'contact', status: 'NEW' });
+  assert.equal(clamped.pagination?.page, 2);
+  assert.equal(clamped.mailboxes.length, 4);
+  rows.slice(0, 5).forEach(row => { row.state = 'IGNORED'; });
+  const afterAction = await controller.discovery(accountId, { page: '2', pageSize: '20', search: 'contact', status: 'NEW' });
+  assert.equal(afterAction.pagination?.page, 1);
+  assert.equal(afterAction.pagination?.totalItems, 19);
+  assert.equal(afterAction.mailboxes.length, 19);
+  const empty = await controller.discovery(accountId, { search: 'no-match' });
+  assert.deepEqual(empty.pagination, { page: 1, pageSize: 20, totalItems: 0, totalPages: 1 });
+  assert.equal(empty.mailboxes.length, 0);
+  const legacy = await controller.discovery(accountId);
+  assert.equal(legacy.mailboxes.length, 35);
+  assert.equal(legacy.pagination, undefined);
+  await assert.rejects(controller.discovery(accountId, { pageSize: '999' }));
+});
+
 test('account create encrypts token, omits token from API result and audit; replacement rotates ciphertext', async () => {
   let stored: Record<string, unknown> = {};
   const audits: Record<string, unknown>[] = [];

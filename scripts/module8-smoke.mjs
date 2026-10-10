@@ -30,6 +30,13 @@ try {
   assert.equal(rotate.status, 201);
   const discover = await call(`cpanel-accounts/${id}/discover`, sessionCookie, 'POST');
   assert.equal(discover.status, 409);
+  const paged = await call(`cpanel-accounts/${id}/discovery?page=2&pageSize=20&search=contact&status=NEW`, sessionCookie);
+  assert.equal(paged.status, 200);
+  assert.deepEqual(paged.body.pagination, { page: 1, pageSize: 20, totalItems: 0, totalPages: 1 });
+  assert.deepEqual(paged.body.mailboxes, []);
+  const legacy = await call(`cpanel-accounts/${id}/discovery`, sessionCookie);
+  assert.equal(legacy.status, 200);
+  assert.equal('pagination' in legacy.body, false);
   const page = await fetch(`${web}/cpanel-accounts`, { headers: { Cookie: sessionCookie } });
   assert.equal(page.status, 200);
   assert((await page.text()).includes('cPanel Accounts'));

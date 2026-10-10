@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpException, Inject, Injectable, OnModuleDestroy, Param, Patch, Post, Req } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpException, Inject, Injectable, OnModuleDestroy, Param, Patch, Post, Query, Req } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import { Prisma } from '@uni/database';
 import { CpanelClient, classifyCpanelError, normalizeEmail, validateCpanelHost } from '@uni/mail';
@@ -12,6 +12,12 @@ const accountFields = z.object({ name: z.string().trim().min(1).max(120), host: 
 const createAccount = accountFields.extend({ apiToken: z.string().min(1).max(4096) });
 const updateAccount = accountFields.partial().strict().refine(value => Object.keys(value).length > 0);
 const importInput = z.object({ projectId: id.optional(), newProject: z.object({ name: z.string().trim().min(1).max(120), slug: z.string().regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/).max(120) }).strict().optional(), mailServerId: id.optional(), createMailServer: z.boolean().optional(), mailHost: z.string().optional() }).strict().refine(value => Boolean(value.projectId) !== Boolean(value.newProject), 'Select a project or create one').refine(value => Boolean(value.mailServerId) !== Boolean(value.createMailServer), 'Select a mail server or create one');
+const discoveryListQuery = z.object({
+  page: z.coerce.number().int().min(1).max(1000000).default(1),
+  pageSize: z.coerce.number().refine(value => [10, 20, 50, 100].includes(value)).default(20),
+  search: z.string().trim().max(320).default(''),
+  status: z.enum(['ALL', 'NEW', 'MANAGED', 'MISSING', 'IGNORED']).default('ALL'),
+}).strict();
 const safeAccount = { id: true, name: true, host: true, port: true, username: true, status: true, connectionStatus: true, lastConnectedAt: true, lastDiscoveryAt: true, lastError: true, createdAt: true, updatedAt: true } as const;
 const key = decodeEncryptionKey(process.env.MAIL_CREDENTIAL_ENCRYPTION_KEY ?? '');
 
@@ -124,15 +130,25 @@ export class CpanelController {
     await this.db.auditLog.create({ data: { userId: request.user.id, action: 'CPANEL_DISCOVERY_STARTED', entityType: 'CpanelAccount', entityId: account.id, ipAddress: request.ip, metadata: { runId: run.id } } });
     return { status: 'QUEUED', runId: run.id };
   }
-  @Get(':id/discovery') async discovery(@Param('id') rawId: string) {
+  @Get(':id/discovery') async discovery(@Param('id') rawId: string, @Query() rawQuery: Record<string, unknown> = {}) {
     const account = await this.account(rawId);
-    const [domains, mailboxes, forwarders, runs] = await Promise.all([
+    const paged = Object.keys(rawQuery).length > 0;
+    const input = paged ? parse(discoveryListQuery, rawQuery) : null;
+    const state = input?.status === 'NEW' ? 'DISCOVERED' : input?.status === 'ALL' ? undefined : input?.status;
+    const mailboxWhere: Prisma.CpanelDiscoveredMailboxWhereInput = { accountId: account.id, ...(state ? { state } : {}), ...(input?.search ? { email: { contains: input.search, mode: 'insensitive' } } : {}) };
+    const [domains, forwarders, runs, totalItems, states] = await Promise.all([
       this.db.cpanelDiscoveredDomain.findMany({ where: { accountId: account.id }, orderBy: { domain: 'asc' } }),
-      this.db.cpanelDiscoveredMailbox.findMany({ where: { accountId: account.id }, orderBy: { email: 'asc' }, include: { managedMailbox: { select: { id: true, email: true, credential: { select: { id: true } } } } } }),
       this.db.cpanelDiscoveredForwarder.findMany({ where: { accountId: account.id }, orderBy: { source: 'asc' } }),
       this.db.cpanelDiscoveryRun.findMany({ where: { accountId: account.id }, orderBy: { createdAt: 'desc' }, take: 20 }),
+      input ? this.db.cpanelDiscoveredMailbox.count({ where: mailboxWhere }) : Promise.resolve(0),
+      input ? this.db.cpanelDiscoveredMailbox.groupBy({ by: ['state'], where: { accountId: account.id }, _count: { _all: true } }) : Promise.resolve([]),
     ]);
-    return { domains, mailboxes: mailboxes.map(item => ({ ...item, usedBytes: item.usedBytes?.toString() ?? null, quotaBytes: item.quotaBytes?.toString() ?? null, usagePercent: item.quotaBytes && item.quotaBytes > 0n && item.usedBytes !== null ? Math.round(Number(item.usedBytes * 100n / item.quotaBytes)) : null, managedMailbox: item.managedMailbox ? { id: item.managedMailbox.id, email: item.managedMailbox.email, credentialConfigured: !!item.managedMailbox.credential } : null })), forwarders, runs };
+    const pageSize = input?.pageSize ?? 20;
+    const totalPages = input ? Math.max(1, Math.ceil(totalItems / pageSize)) : 1;
+    const page = Math.min(input?.page ?? 1, totalPages);
+    const mailboxes = await this.db.cpanelDiscoveredMailbox.findMany({ where: mailboxWhere, orderBy: [{ email: 'asc' }, { id: 'asc' }], ...(input ? { skip: (page - 1) * pageSize, take: pageSize } : {}), include: { managedMailbox: { select: { id: true, email: true, credential: { select: { id: true } } } } } });
+    const items = mailboxes.map(item => ({ ...item, usedBytes: item.usedBytes?.toString() ?? null, quotaBytes: item.quotaBytes?.toString() ?? null, usagePercent: item.quotaBytes && item.quotaBytes > 0n && item.usedBytes !== null ? Math.round(Number(item.usedBytes * 100n / item.quotaBytes)) : null, managedMailbox: item.managedMailbox ? { id: item.managedMailbox.id, email: item.managedMailbox.email, credentialConfigured: !!item.managedMailbox.credential } : null }));
+    return input ? { domains, mailboxes: items, forwarders, runs, pagination: { page, pageSize, totalItems, totalPages }, summary: { mailboxes: states.reduce((sum, row) => sum + row._count._all, 0), missing: states.find(row => row.state === 'MISSING')?._count._all ?? 0 } } : { domains, mailboxes: items, forwarders, runs };
   }
   @Post(':id/mailboxes/:mailboxId/ignore') async ignore(@Param('id') rawId: string, @Param('mailboxId') rawMailboxId: string, @Req() request: AuthedRequest) {
     const account = await this.account(rawId);
