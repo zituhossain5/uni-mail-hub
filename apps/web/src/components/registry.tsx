@@ -1,6 +1,7 @@
 'use client';
 import { FormEvent, useCallback, useEffect, useState } from 'react';
 import Link from 'next/link';
+import { useRouter } from 'next/navigation';
 import { ArrowRight, CirclePlus, FolderKanban, Globe2, Mail, Pencil, Search, Trash2 } from 'lucide-react';
 import { ConfirmDialog, Dialog } from './dialog';
 import { DateTime, EmptyState, PageHeader, StatusBadge } from './ui';
@@ -22,6 +23,7 @@ function latestCheck(item: Mailbox, protocol: 'IMAP' | 'SMTP') { return item.con
 function entityName(kind: Kind, item: Entity) { return kind === 'projects' ? (item as Project).name : kind === 'domains' ? (item as Domain).domain : (item as Mailbox).email; }
 
 export function Registry({ kind }: { kind: Kind }) {
+  const router = useRouter();
   const meta = config[kind];
   const [items, setItems] = useState<Entity[]>([]); const [projects, setProjects] = useState<Project[]>([]); const [domains, setDomains] = useState<Domain[]>([]); const [servers, setServers] = useState<Server[]>([]);
   const [loading, setLoading] = useState(true); const [error, setError] = useState(''); const [search, setSearch] = useState(''); const [healthFilter, setHealthFilter] = useState(''); const [credentialFilter, setCredentialFilter] = useState('');
@@ -29,7 +31,7 @@ export function Registry({ kind }: { kind: Kind }) {
   const load = useCallback(async () => { try { const [records, projectRecords, domainRecords, serverRecords] = await Promise.all([request<Entity[]>(kind), kind === 'projects' ? Promise.resolve([]) : request<Project[]>('projects'), kind === 'mailboxes' ? request<Domain[]>('domains') : Promise.resolve([]), kind === 'mailboxes' ? request<Server[]>('mail-servers') : Promise.resolve([])]); setItems(records); setProjects(projectRecords); setDomains(domainRecords); setServers(serverRecords); setError(''); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to load records'); } finally { setLoading(false); } }, [kind]);
   useEffect(() => { void Promise.resolve().then(load); }, [load]);
   const filtered = items.filter(item => entityName(kind, item).toLowerCase().includes(search.toLowerCase()) && (kind !== 'mailboxes' || ((!healthFilter || item.status === healthFilter) && (!credentialFilter || Boolean((item as Mailbox).credential) === (credentialFilter === 'configured')))));
-  async function save(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setSaving(true); setError(''); const values = Object.fromEntries(new FormData(event.currentTarget).entries()); const body: Record<string, unknown> = { ...values }; if (kind === 'mailboxes') { body.isActive = values.isActive === 'true'; body.mailServerId = values.mailServerId || null; if (editing && values.status !== 'DISABLED' && editing.status !== 'DISABLED') delete body.status; if (!values.displayName) body.displayName = null; } if (kind === 'projects' && !values.description) body.description = null; try { await request(`${kind}${editing ? `/${editing.id}` : ''}`, { method: editing ? 'PATCH' : 'POST', body: JSON.stringify(body) }); setModal(false); setEditing(null); await load(); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to save'); } finally { setSaving(false); } }
+  async function save(event: FormEvent<HTMLFormElement>) { event.preventDefault(); setSaving(true); setError(''); const values = Object.fromEntries(new FormData(event.currentTarget).entries()); const body: Record<string, unknown> = { ...values }; if (kind === 'mailboxes') { body.isActive = values.isActive === 'true'; body.mailServerId = values.mailServerId || null; if (editing && values.status !== 'DISABLED' && editing.status !== 'DISABLED') delete body.status; if (!values.displayName) body.displayName = null; } if (kind === 'projects' && !values.description) body.description = null; try { const created = await request<Entity>(`${kind}${editing ? `/${editing.id}` : ''}`, { method: editing ? 'PATCH' : 'POST', body: JSON.stringify(body) }); setModal(false); setEditing(null); await load(); if (kind === 'projects' && !editing) router.push(`/projects/${created.id}?tab=Integration`); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to save'); } finally { setSaving(false); } }
   async function remove() { if (!deleteTarget) return; setDeleting(true); setError(''); try { await request(`${kind}/${deleteTarget.id}`, { method: 'DELETE' }); setDeleteTarget(null); await load(); } catch (err) { setError(err instanceof Error ? err.message : 'Unable to delete'); } finally { setDeleting(false); } }
   const selectedProject = editing && 'projectId' in editing ? editing.projectId : undefined;
   return <><PageHeader eyebrow="REGISTRY" title={meta.title} description={meta.description} actions={<button className="primary-button" onClick={() => { setEditing(null); setError(''); setModal(true); }}><CirclePlus size={17} aria-hidden="true"/>Add {meta.singular}</button>}/>

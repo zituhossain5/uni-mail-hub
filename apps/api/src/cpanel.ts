@@ -79,7 +79,9 @@ export class CpanelController {
   @Delete(':id') async remove(@Param('id') rawId: string, @Req() request: AuthedRequest) {
     const account = await this.account(rawId);
     if (await this.db.cpanelDiscoveryRun.count({ where: { accountId: account.id, status: { in: ['QUEUED', 'RUNNING'] } } })) throw new HttpException({ code: 'CPANEL_DISCOVERY_ACTIVE', message: 'Wait for the current discovery run before removing this account.' }, 409);
+    if (await this.db.cpanelMailboxChange.count({ where: { accountId: account.id, status: { in: ['PREPARED', 'CRITICAL'] } } })) throw new HttpException({ code: 'CPANEL_RECOVERY_REQUIRED', message: 'Resolve pending mailbox changes before removing this account.' }, 409);
     await this.db.$transaction(async tx => {
+      await tx.cpanelMailboxChange.deleteMany({ where: { accountId: account.id, status: 'COMPLETED' } });
       await tx.cpanelAccount.delete({ where: { id: account.id } });
       await tx.auditLog.create({ data: { userId: request.user.id, action: 'CPANEL_ACCOUNT_REMOVED', entityType: 'CpanelAccount', entityId: account.id, ipAddress: request.ip, metadata: { host: account.host } } });
     });

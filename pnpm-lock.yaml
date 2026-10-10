@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@unicodeit/uni-mail':
+        specifier: link:packages\uni-mail-client
+        version: link:packages/uni-mail-client
     devDependencies:
       '@eslint/js':
         specifier: ^9.0.0
@@ -224,6 +228,15 @@ importers:
       zod:
         specifier: ^3.25.0
         version: 3.25.76
+
+  packages/uni-mail-client:
+    devDependencies:
+      '@types/node':
+        specifier: ^24.0.0
+        version: 24.19.1
+      typescript:
+        specifier: ^5.9.0
+        version: 5.9.3
 
 packages:
 

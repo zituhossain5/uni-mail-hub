@@ -3,7 +3,8 @@ import { request } from 'node:https';
 import { isIP } from 'node:net';
 
 export type CpanelEndpoint = { host: string; port: number; username: string; apiToken: string };
-export type CpanelDiagnostic = { operation: 'list_domains' | 'list_pops_with_disk' | 'list_forwarders'; stage: 'DNS' | 'PINNING' | 'TCP' | 'TLS' | 'HTTP' | 'UAPI'; status: 'STARTED' | 'SUCCESS' | 'FAILED'; code?: string };
+type CpanelOperation = 'list_domains' | 'list_pops_with_disk' | 'list_forwarders' | 'add_pop' | 'passwd_pop' | 'edit_pop_quota' | 'suspend_login' | 'unsuspend_login' | 'suspend_outgoing' | 'unsuspend_outgoing' | 'delete_pop';
+export type CpanelDiagnostic = { operation: CpanelOperation; stage: 'DNS' | 'PINNING' | 'TCP' | 'TLS' | 'HTTP' | 'UAPI'; status: 'STARTED' | 'SUCCESS' | 'FAILED'; code?: string };
 export type DiscoveredMailbox = { email: string; domain: string; usedBytes: bigint | null; quotaBytes: bigint | null; unlimitedQuota: boolean; suspended: boolean | null };
 export type DiscoveredForwarder = { domain: string; source: string; destination: string };
 export class CpanelError extends Error {
@@ -14,6 +15,18 @@ const domainPattern = /^(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 const emailPattern = /^[^\s@]+@(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,}$/;
 export function normalizeDomain(value: unknown): string | null { const domain = String(value ?? '').trim().toLowerCase(); return domainPattern.test(domain) && domain.length <= 253 ? domain : null; }
 export function normalizeEmail(value: unknown): string | null { const email = String(value ?? '').trim().toLowerCase(); return emailPattern.test(email) && email.length <= 320 ? email : null; }
+export function cpanelMailboxParts(value: string): { email: string; local: string; domain: string } {
+  const email = normalizeEmail(value);
+  if (!email) throw new CpanelError('CPANEL_INVALID_MAILBOX', 'Enter a valid mailbox address.');
+  const [local, domain] = email.split('@');
+  if (!local || !/^[a-z0-9][a-z0-9._-]{0,63}$/.test(local) || !domain) throw new CpanelError('CPANEL_INVALID_MAILBOX', 'Enter a supported cPanel mailbox address.');
+  return { email, local, domain };
+}
+export function cpanelQuota(value: number | null): string {
+  if (value === null) return '0'; // cPanel uses zero for unlimited; API inputs never use zero.
+  if (!Number.isSafeInteger(value) || value < 1 || value > 1048576) throw new CpanelError('CPANEL_INVALID_QUOTA', 'Quota must be 1–1048576 MB or Unlimited.');
+  return String(value);
+}
 export function validateCpanelHost(value: string): string {
   const host = value.trim().toLowerCase().replace(/\.$/, '');
   if (!(domainPattern.test(host) || isIP(host) === 4) || host.length > 253 || host.endsWith('.local') || host.endsWith('.internal') || isIP(host) === 4 && !publicAddress(host)) throw new CpanelError('CPANEL_INVALID_HOST', 'Enter a public cPanel hostname or IPv4 address.');
@@ -45,6 +58,14 @@ export async function resolveCpanelHost(host: string): Promise<{ address: string
 }
 export function pinnedLookupAnswer(resolved: { address: string; family: 4 | 6 }, all: boolean) {
   return all ? [resolved] : resolved.address;
+}
+export function cpanelRequestSpec(module: 'DomainInfo' | 'Email', fn: CpanelOperation, params?: Record<string, string>, mutation = false) {
+  const encoded = new URLSearchParams(params).toString();
+  return {
+    path: `/execute/${module}/${fn}${!mutation && encoded ? `?${encoded}` : ''}`,
+    method: mutation ? 'POST' as const : 'GET' as const,
+    body: mutation ? encoded : undefined,
+  };
 }
 type Data = Record<string, unknown>;
 function record(value: unknown): Data { return value && typeof value === 'object' && !Array.isArray(value) ? value as Data : {}; }
@@ -110,25 +131,25 @@ export class CpanelClient {
     if (endpoint.port !== 2083 || !/^[a-z0-9_-]{1,32}$/.test(endpoint.username) || !endpoint.apiToken) throw new CpanelError('CPANEL_INVALID_CONFIG', 'Invalid cPanel connection settings.');
   }
   private emit(event: CpanelDiagnostic) { try { this.diagnostic?.(event); } catch { /* Logging must not affect the request. */ } }
-  private async call(module: 'DomainInfo' | 'Email', fn: 'list_domains' | 'list_pops_with_disk' | 'list_forwarders', params?: Record<string, string>): Promise<unknown> {
+  private async call(module: 'DomainInfo' | 'Email', fn: CpanelOperation, params?: Record<string, string>, mutation = false): Promise<unknown> {
     this.emit({ operation: fn, stage: 'DNS', status: 'STARTED' });
     let resolved: Awaited<ReturnType<typeof resolveCpanelHost>>;
     try { resolved = await resolveCpanelHost(this.host); this.emit({ operation: fn, stage: 'DNS', status: 'SUCCESS' }); }
     catch (error) { const failure = classifyCpanelError(error); this.emit({ operation: fn, stage: 'DNS', status: 'FAILED', code: failure.code }); throw failure; }
-    const query = new URLSearchParams(params).toString();
-    const path = `/execute/${module}/${fn}${query ? `?${query}` : ''}`;
+    // Passwords must travel in the TLS-protected request body, never in a URL.
+    const spec = cpanelRequestSpec(module, fn, params, mutation);
     const payload = await new Promise<string>((resolve, reject) => {
       let tcpConnected = false;
       let tlsConnected = false;
       this.emit({ operation: fn, stage: 'PINNING', status: 'STARTED' });
-      const req = request({ hostname: this.host, port: 2083, path, method: 'GET', servername: this.host, agent: false,
+      const req = request({ hostname: this.host, port: 2083, path: spec.path, method: spec.method, servername: this.host, agent: false,
         lookup: (_host, options, callback) => {
           // Node's family auto-selection asks for all addresses. Its callback must
           // receive an array in that case, even when only one validated IP is pinned.
           callback(null, pinnedLookupAnswer(resolved, Boolean(options.all)), options.all ? undefined : resolved.family);
           this.emit({ operation: fn, stage: 'PINNING', status: 'SUCCESS' });
         },
-        headers: { Host: this.host, Authorization: `cpanel ${this.endpoint.username}:${this.endpoint.apiToken}`, Accept: 'application/json' }, timeout: 10000 }, response => {
+        headers: { Host: this.host, Authorization: `cpanel ${this.endpoint.username}:${this.endpoint.apiToken}`, Accept: 'application/json', ...(mutation ? { 'Content-Type': 'application/x-www-form-urlencoded', 'Content-Length': Buffer.byteLength(spec.body ?? '') } : {}) }, timeout: 10000 }, response => {
         if (response.statusCode === 200) this.emit({ operation: fn, stage: 'HTTP', status: 'SUCCESS' });
         else this.emit({ operation: fn, stage: 'HTTP', status: 'FAILED', code: response.statusCode === 401 || response.statusCode === 403 ? 'CPANEL_AUTH_FAILED' : 'CPANEL_API_ERROR' });
         if (response.statusCode === 401 || response.statusCode === 403) { response.resume(); reject(new CpanelError('CPANEL_AUTH_FAILED', 'cPanel rejected the API token.')); return; }
@@ -149,7 +170,7 @@ export class CpanelClient {
         this.emit({ operation: fn, stage, status: 'FAILED', code: failure.code });
         reject(failure);
       });
-      req.end();
+      req.end(spec.body);
     }).catch(error => { throw classifyCpanelError(error); });
     try { return parseUapiResponse(payload); }
     catch (error) { const failure = classifyCpanelError(error); this.emit({ operation: fn, stage: 'UAPI', status: 'FAILED', code: failure.code }); throw failure; }
@@ -179,5 +200,26 @@ export class CpanelClient {
     const forwarders = parseForwarders(data, domain);
     this.emit({ operation: 'list_forwarders', stage: 'UAPI', status: 'SUCCESS' });
     return forwarders;
+  }
+  async createMailbox(email: string, password: string, quotaMb: number | null) {
+    const { local, domain } = cpanelMailboxParts(email);
+    await this.call('Email', 'add_pop', { email: local, domain, password, quota: cpanelQuota(quotaMb), send_welcome_email: '0' }, true);
+  }
+  async changeMailboxPassword(email: string, password: string) {
+    const mailbox = cpanelMailboxParts(email);
+    await this.call('Email', 'passwd_pop', { email: mailbox.email, password }, true);
+  }
+  async changeMailboxQuota(email: string, quotaMb: number | null) {
+    const { local, domain } = cpanelMailboxParts(email);
+    await this.call('Email', 'edit_pop_quota', { email: local, domain, quota: cpanelQuota(quotaMb) }, true);
+  }
+  async setMailboxSuspended(email: string, suspended: boolean) {
+    cpanelMailboxParts(email);
+    await this.call('Email', suspended ? 'suspend_login' : 'unsuspend_login', { email }, true);
+    await this.call('Email', suspended ? 'suspend_outgoing' : 'unsuspend_outgoing', { email }, true);
+  }
+  async deleteMailbox(email: string) {
+    cpanelMailboxParts(email);
+    await this.call('Email', 'delete_pop', { email }, true);
   }
 }

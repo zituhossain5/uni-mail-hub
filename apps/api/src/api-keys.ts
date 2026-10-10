@@ -32,6 +32,7 @@ export class ApiKeysController {
     const item = await this.db.$transaction(async tx => {
       const saved = await tx.apiKey.create({ data: { projectId: input.projectId, name: input.name, keyPrefix, keyHash, scopes: input.scopes, expiresAt, createdByUserId: request.user.id, grants: { create: mailboxIds.map(mailboxId => ({ mailboxId })) } }, select: safeSelect });
       await tx.auditLog.create({ data: { userId: request.user.id, action: 'API_KEY_CREATED', entityType: 'ApiKey', entityId: saved.id, metadata: { projectId: input.projectId, mailboxCount: mailboxIds.length }, ipAddress: request.ip } });
+      if (input.integration) await tx.auditLog.create({ data: { userId: request.user.id, action: 'PROJECT_INTEGRATION_KEY_CREATED', entityType: 'ApiKey', entityId: saved.id, metadata: { projectId: input.projectId, mailboxCount: mailboxIds.length }, ipAddress: request.ip } });
       return saved;
     });
     return { ...item, rawKey };

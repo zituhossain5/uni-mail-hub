@@ -60,6 +60,7 @@ export const apiKeyCreateSchema = z.object({
   mailboxIds: z.array(z.string().cuid()).min(1).max(100),
   expiresAt: z.string().datetime().nullable().optional(),
   scopes: z.array(z.literal('MAIL_SEND')).min(1).default(['MAIL_SEND']),
+  integration: z.literal(true).optional(),
 }).strict();
 export type UserRole = (typeof userRoles)[number];
 export type ProjectStatus = (typeof projectStatuses)[number];

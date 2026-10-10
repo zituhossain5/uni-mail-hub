@@ -19,6 +19,8 @@ import { WebmailContextController, WebmailMessagesController } from './webmail';
 import { MailActionsController } from './mail-actions';
 import { MailSearchController } from './mail-search';
 import { CpanelController, CpanelDiscoveryQueue } from './cpanel';
+import { CpanelProvisioningController } from './cpanel-provisioning';
+import { ProjectIntegrationController } from './project-integration';
 import { MonitoringController, MonitoringQueue, MonitoringWatchdog } from './monitoring';
 import { WebhooksController, SuppressionsController } from './webhooks';
 
@@ -39,7 +41,7 @@ class HealthController {
 
 @Module({
   imports: [JwtModule.register({ secret: config.JWT_SECRET }), ThrottlerModule.forRoot([{ ttl: 60_000, limit: 120 }])],
-  controllers: [HealthController, AuthController, DashboardController, ProjectsController, DomainsController, MailboxesController, MailServersController, MailConnectivityController, ImapSyncController, WebmailContextController, WebmailMessagesController, MailSearchController, MailActionsController, ApiKeysController, ClientMessagesController, AdminComposeController, AdminMessagesController, CpanelController, MonitoringController, WebhooksController, SuppressionsController],
+  controllers: [HealthController, AuthController, DashboardController, ProjectsController, ProjectIntegrationController, DomainsController, MailboxesController, MailServersController, MailConnectivityController, ImapSyncController, WebmailContextController, WebmailMessagesController, MailSearchController, MailActionsController, ApiKeysController, ClientMessagesController, AdminComposeController, AdminMessagesController, CpanelController, CpanelProvisioningController, MonitoringController, WebhooksController, SuppressionsController],
   providers: [Database, RedisConnection, MailQueue, ImapSyncQueue, CpanelDiscoveryQueue, MonitoringQueue, MonitoringWatchdog, ApiKeyGuard, { provide: APP_GUARD, useClass: ThrottlerGuard }, { provide: APP_GUARD, useClass: AuthGuard }, { provide: APP_FILTER, useClass: ApiExceptionFilter }],
 })
 class AppModule {}

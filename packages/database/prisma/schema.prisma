@@ -215,6 +215,45 @@ model CpanelAccount {
   mailboxes CpanelDiscoveredMailbox[]
   forwarders CpanelDiscoveredForwarder[]
   runs CpanelDiscoveryRun[]
+  mailboxChanges CpanelMailboxChange[]
+}
+
+enum CpanelMailboxChangeAction {
+  CREATE
+  ROTATE
+}
+
+enum CpanelMailboxChangeStatus {
+  PREPARED
+  CRITICAL
+  COMPLETED
+}
+
+model CpanelMailboxChange {
+  id String @id @default(cuid())
+  accountId String
+  account CpanelAccount @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  email String
+  activeEmail String? @unique
+  action CpanelMailboxChangeAction
+  status CpanelMailboxChangeStatus @default(PREPARED)
+  projectId String?
+  domainId String?
+  mailServerId String?
+  mailHost String?
+  mailboxId String?
+  quotaMb Int?
+  encryptedPassword String?
+  encryptionIv String?
+  encryptionAuthTag String?
+  encryptionVersion Int?
+  errorCode String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  completedAt DateTime?
+
+  @@index([accountId, status])
+  @@index([email, status])
 }
 
 model CpanelDiscoveredDomain {
