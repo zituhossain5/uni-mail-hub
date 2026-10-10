@@ -268,12 +268,17 @@ test('quota updates reject zero and deletion disables the managed mailbox withou
 });
 
 test('integration examples use the Sending API and contain no real keys or SMTP credentials', () => {
-  assert.deepEqual(Object.keys(integrationExamples), ['Node.js', 'Next.js', 'NestJS', 'PHP', 'Laravel', 'WordPress', 'cURL', 'PowerShell']);
+  assert.deepEqual(Object.keys(integrationExamples), ['Node.js', 'Next.js', 'NestJS', 'PHP', 'Laravel', 'WordPress', 'cURL', 'PowerShell', 'Python', 'FastAPI', 'Django', 'Flask']);
   for (const [name, example] of Object.entries(integrationExamples)) {
     assert.match(example, /\/api\/v1\/messages/, name);
     assert.match(example, /Idempotency-Key/, name);
     assert.match(example, /Content-Type/, name);
     assert.doesNotMatch(example, /SMTP_PASSWORD|umh_(?:test|live)_[A-Za-z0-9_-]{20}/, name);
+  }
+  for (const name of ['Python', 'FastAPI', 'Django', 'Flask']) {
+    assert.match(integrationExamples[name]!, /UniMail\.from_env\(\)/, name);
+    assert.match(integrationExamples[name]!, /UNI_MAIL_HUB_API_KEY/, name);
+    assert.match(integrationExamples[name]!, /UNI_MAIL_HUB_MAILBOX_ID/, name);
   }
 });
 

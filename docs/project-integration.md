@@ -26,8 +26,10 @@ Applications call `POST /api/v1/messages` with a Bearer API key,
 `Idempotency-Key`, and JSON containing `fromMailboxId`, recipients, subject,
 and text or HTML. The key must have a grant for that mailbox. The Integration
 page offers copyable Node.js, Next.js, NestJS, PHP, Laravel, WordPress, cURL,
-and PowerShell examples. The WordPress example sends an application-specific
-message and does not replace `wp_mail()` globally.
+PowerShell, Python, FastAPI, Django, and Flask examples. Python applications can
+install the private [`uni-mail`](python-sdk.md) package locally and call
+`UniMail.from_env()` or `AsyncUniMail.from_env()`. The WordPress example sends
+an application-specific message and does not replace `wp_mail()` globally.
 
 For an existing application:
 

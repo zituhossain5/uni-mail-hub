@@ -143,4 +143,90 @@ $headers = @{
     'Content-Type' = 'application/json'
 }
 Invoke-RestMethod -Method Post -Uri "$($env:UNI_MAIL_HUB_URL)/api/v1/messages" -Headers $headers -Body $body`,
+  Python: `# pip install -e D:\\projects\\uni-mail-hub\\clients\\python
+# Set UNI_MAIL_HUB_URL, UNI_MAIL_HUB_API_KEY, UNI_MAIL_HUB_MAILBOX_ID
+# in the Python server environment, not frontend code.
+from uni_mail import UniMail
+
+# The SDK sends POST /api/v1/messages with Authorization: Bearer,
+# Idempotency-Key, and Content-Type: application/json headers.
+with UniMail.from_env() as mail:
+    sent = mail.send(
+        to="client@example.com", subject="Hello", text="Hello",
+        idempotency_key="submission-123",  # reuse on retry
+    )
+    status = mail.get_message(sent.id)`,
+  FastAPI: `# Server-side FastAPI lifespan: reuse one async mail client.
+# UNI_MAIL_HUB_URL, UNI_MAIL_HUB_API_KEY, UNI_MAIL_HUB_MAILBOX_ID
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, HTTPException, Request
+from uni_mail import AsyncUniMail, UniMailError
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with AsyncUniMail.from_env() as mail:
+        app.state.mail = mail
+        yield
+
+app = FastAPI(lifespan=lifespan)
+
+@app.post("/contact", status_code=202)
+async def contact(request: Request):
+    data = await request.json()  # validate and persist a submission first
+    try:
+        # SDK: POST /api/v1/messages, Authorization: Bearer,
+        # Idempotency-Key, Content-Type: application/json
+        sent = await request.app.state.mail.send(
+            to="sales@example.com", reply_to=data["email"],
+            subject="New contact", text=data["message"],
+            idempotency_key=f"contact:{data['submission_id']}",
+        )
+    except UniMailError as exc:
+        raise HTTPException(status_code=503, detail=exc.code) from None
+    return {"message_id": sent.id}`,
+  Django: `# Server-side Django view; configure UNI_MAIL_HUB_URL,
+# UNI_MAIL_HUB_API_KEY, UNI_MAIL_HUB_MAILBOX_ID in the server environment.
+from django.http import JsonResponse
+from uni_mail import UniMail, UniMailError
+
+mail = UniMail.from_env()  # reuse per worker
+
+def contact(request):
+    form = ContactForm(request.POST)  # validate and persist a submission
+    if not form.is_valid():
+        return JsonResponse({"error": "Invalid form"}, status=400)
+    data = form.cleaned_data
+    try:
+        # SDK: POST /api/v1/messages, Authorization: Bearer,
+        # Idempotency-Key, Content-Type: application/json
+        sent = mail.send(
+            to="sales@example.com", reply_to=data["email"],
+            subject="New contact", text=data["message"],
+            idempotency_key=f"contact:{data['submission_id']}",
+        )
+    except UniMailError as exc:
+        return JsonResponse({"error": exc.code}, status=503)
+    return JsonResponse({"message_id": sent.id}, status=202)`,
+  Flask: `# Server-side Flask route; configure UNI_MAIL_HUB_URL,
+# UNI_MAIL_HUB_API_KEY, UNI_MAIL_HUB_MAILBOX_ID in the server environment.
+from flask import Flask, jsonify, request
+from uni_mail import UniMail, UniMailError
+
+app = Flask(__name__)
+mail = UniMail.from_env()  # reuse per worker
+
+@app.post("/contact")
+def contact():
+    data = request.get_json()  # validate and persist a submission first
+    try:
+        # SDK: POST /api/v1/messages, Authorization: Bearer,
+        # Idempotency-Key, Content-Type: application/json
+        sent = mail.send(
+            to="sales@example.com", reply_to=data["email"],
+            subject="New contact", text=data["message"],
+            idempotency_key=f"contact:{data['submission_id']}",
+        )
+    except UniMailError as exc:
+        return jsonify(error=exc.code), 503
+    return jsonify(message_id=sent.id), 202`,
 };
