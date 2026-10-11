@@ -29,7 +29,8 @@ services:
         target: /etc/nginx/conf.d/default.conf
         read_only: true
       - type: bind
-        source: ${TLS_CERT_DIR:?Set TLS_CERT_DIR}
+        # Traefik override disables this service; standalone preflight requires real cert files.
+        source: ${TLS_CERT_DIR:-./deploy/nginx}
         target: /etc/nginx/tls
         read_only: true
     depends_on:
@@ -176,7 +177,7 @@ services:
         source: ${BACKUP_HOST_DIR:?Set BACKUP_HOST_DIR}
         target: /backups
       - type: bind
-        source: ${TLS_CERT_DIR:?Set TLS_CERT_DIR}
+        source: ${TLS_CERT_DIR:-./deploy/nginx}
         target: /etc/nginx/tls
         read_only: true
     networks: [front, back]

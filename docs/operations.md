@@ -6,10 +6,18 @@ Run these commands from the deployment repository on the Linux host. They requir
 dc() { docker compose --env-file .env.production -f docker-compose.prod.yml "$@"; }
 ```
 
+For the existing Traefik deployment, define `dc` with both files instead; keep this selection for every command, including backup, migration and health checks:
+
+```bash
+dc() { docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.traefik.yml "$@"; }
+```
+
+In Traefik mode the built-in `reverse-proxy` service is disabled. The existing proxy handles TLS and certificate renewal. Use `dc run --rm ops node scripts/production/check.mjs` and `dc run --rm ops node scripts/production/smoke.mjs` for that mode; the `pnpm production:*` shortcuts select only the standalone Compose file.
+
 | Task | Command |
 | --- | --- |
 | Service status | `dc ps` |
-| Recent logs | `dc logs --tail=100 api worker web reverse-proxy` |
+| Recent logs | `dc logs --tail=100 api worker web` |
 | Follow worker logs | `dc logs -f --tail=100 worker` |
 | Restart API | `dc restart api` |
 | Restart worker | `dc restart worker` |

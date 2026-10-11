@@ -1,0 +1,46 @@
+# Compose v2.24.4+ is required for !override on the ops bind mounts.
+services:
+  reverse-proxy:
+    profiles: [standalone-nginx]
+
+  web:
+    networks: [front, app_plane]
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: app_plane
+      traefik.http.services.uni-mail-hub-web.loadbalancer.server.port: '3000'
+      traefik.http.routers.uni-mail-hub-web.rule: Host(`mailhub.unicodeit.com`)
+      traefik.http.routers.uni-mail-hub-web.entrypoints: websecure
+      traefik.http.routers.uni-mail-hub-web.tls: 'true'
+      traefik.http.routers.uni-mail-hub-web.tls.certresolver: letsencrypt
+      traefik.http.routers.uni-mail-hub-web.service: uni-mail-hub-web
+      traefik.http.routers.uni-mail-hub-http.rule: Host(`mailhub.unicodeit.com`)
+      traefik.http.routers.uni-mail-hub-http.entrypoints: web
+      traefik.http.routers.uni-mail-hub-http.middlewares: uni-mail-hub-https-redirect
+      traefik.http.routers.uni-mail-hub-http.service: uni-mail-hub-web
+      traefik.http.middlewares.uni-mail-hub-https-redirect.redirectscheme.scheme: https
+      traefik.http.middlewares.uni-mail-hub-https-redirect.redirectscheme.permanent: 'true'
+
+  api:
+    networks: [front, back, app_plane]
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: app_plane
+      traefik.http.services.uni-mail-hub-api.loadbalancer.server.port: '4000'
+      traefik.http.routers.uni-mail-hub-api.rule: Host(`mailhub.unicodeit.com`) && (Path(`/api/v1/health`) || Path(`/api/v1/messages`) || PathPrefix(`/api/v1/messages/`))
+      traefik.http.routers.uni-mail-hub-api.entrypoints: websecure
+      traefik.http.routers.uni-mail-hub-api.tls: 'true'
+      traefik.http.routers.uni-mail-hub-api.tls.certresolver: letsencrypt
+      traefik.http.routers.uni-mail-hub-api.priority: '100'
+      traefik.http.routers.uni-mail-hub-api.service: uni-mail-hub-api
+
+  ops:
+    volumes: !override
+      - type: bind
+        source: ${BACKUP_HOST_DIR:?Set BACKUP_HOST_DIR}
+        target: /backups
+
+networks:
+  app_plane:
+    external: true
+    name: app_plane

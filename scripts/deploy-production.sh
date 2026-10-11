@@ -3,15 +3,25 @@ set -euo pipefail
 
 cd "$(dirname "$0")/.."
 mode="${1:-}"
-if [[ "$mode" != --fresh && "$mode" != --update || "$#" -ne 1 ]]; then
-  echo 'Usage: scripts/deploy-production.sh --fresh|--update' >&2
+proxy_mode="${2:-}"
+if { [[ "$mode" != --fresh && "$mode" != --update ]]; } || { [[ -n "$proxy_mode" && "$proxy_mode" != --traefik ]]; } || [[ "$#" -gt 2 ]]; then
+  echo 'Usage: scripts/deploy-production.sh --fresh|--update [--traefik]' >&2
   exit 2
 fi
 for tool in docker; do command -v "$tool" >/dev/null || { echo "Missing tool: $tool" >&2; exit 1; }; done
 docker compose version >/dev/null
 [[ -f .env.production ]] || { echo 'Missing .env.production' >&2; exit 1; }
-[[ -f deploy/nginx/uni-mail-hub.conf ]] || { echo 'Missing proxy config' >&2; exit 1; }
-dc() { docker compose --env-file .env.production -f docker-compose.prod.yml "$@"; }
+if [[ "$proxy_mode" != --traefik ]]; then
+  [[ -f deploy/nginx/uni-mail-hub.conf ]] || { echo 'Missing proxy config' >&2; exit 1; }
+fi
+compose_files=(-f docker-compose.prod.yml)
+services=(api worker web)
+if [[ "$proxy_mode" == --traefik ]]; then
+  compose_files+=(-f docker-compose.traefik.yml)
+else
+  services+=(reverse-proxy)
+fi
+dc() { docker compose --env-file .env.production "${compose_files[@]}" "$@"; }
 wait_healthy() {
   local service="$1" container status
   container="$(dc ps -q "$service")"
@@ -48,8 +58,8 @@ else
   dc run --rm ops node scripts/production/check.mjs --require-enrolled
 fi
 
-dc up -d api worker web reverse-proxy
-for service in api worker web reverse-proxy; do wait_healthy "$service"; done
+dc up -d "${services[@]}"
+for service in "${services[@]}"; do wait_healthy "$service"; done
 dc run --rm ops node scripts/production/smoke.mjs
 echo 'Deployment checks passed. Keep the previous image tag and verified backup for rollback.'
 if [[ "$mode" == --fresh ]]; then

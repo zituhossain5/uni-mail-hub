@@ -1,17 +1,17 @@
 # Production deployment preparation
 
-This repository contains a Docker Compose deployment for a Linux VPS. No VPS, DNS, firewall, certificate authority, or production database operation is performed by this module. Follow this runbook only after choosing a deployment host and obtaining a valid TLS certificate for the application name.
+This repository contains two Docker Compose deployment modes for a Linux VPS: standalone Nginx and an override for an existing Traefik proxy. No VPS, DNS, firewall, certificate authority, or production database operation is performed by this module.
 
 ## Architecture
 
-`reverse-proxy` publishes 80/443 and terminates TLS. It sends browser traffic and administrator `/api/v1/*` calls to Next.js, whose existing relay holds the HttpOnly session cookie and calls NestJS on `http://api:4000`. Only `/api/v1/health` and API-key-protected `/api/v1/messages` reach NestJS directly through Nginx. The worker owns the existing BullMQ processors and retention scheduler. PostgreSQL and Redis have no published ports and are attached only to the internal `back` network. The worker has a separate outbound network for SMTP, IMAP, webhooks, DNS, and cPanel. Web uses `front` to reach API; API joins `front` and the private data network. The `ops` image is one-shot and contains Prisma and PostgreSQL client tools; these are absent from the long-running API and worker images.
+In standalone mode, `reverse-proxy` publishes 80/443 and terminates TLS. In Traefik mode, the existing shared proxy owns those ports and built-in Nginx is disabled. Both modes send browser traffic and administrator `/api/v1/*` calls to Next.js, whose existing relay holds the HttpOnly session cookie and calls NestJS on `http://api:4000`. Only `/api/v1/health` and API-key-protected `/api/v1/messages` and its subpaths reach NestJS directly. The worker owns the existing BullMQ processors and retention scheduler. PostgreSQL and Redis have no published ports and are attached only to the internal `back` network. The worker has a separate outbound network for SMTP, IMAP, webhooks, DNS, and cPanel. Web uses `front` to reach API; API joins `front` and the private data network. The `ops` image is one-shot and contains Prisma and PostgreSQL client tools; these are absent from the long-running API and worker images.
 
 The production image build uses Node 24.13.0, pnpm 11.24.0 and the lockfile. Runtime API/worker images contain production dependencies, compiled code and the generated Prisma client. The web image uses Next.js standalone output. The Docker context excludes `.env*`, backup archives, private keys, local stores and generated build output. Use an immutable `APP_VERSION` (release or commit identifier), retain the prior tag for rollback, and pin reviewed image digests before an actual deployment.
 
 ## Host prerequisites
 
 - Linux VPS with Docker Engine and the Compose plugin, an SSH account with restricted sudo, a domain/subdomain and control of its DNS.
-- A valid full chain and private key for the chosen application hostname. Put `fullchain.pem` and `privkey.pem` in `TLS_CERT_DIR`; these names are required by the mounted Nginx config. Obtain/renew certificates using your approved host procedure. Nginx will not start without them. The port 80 listener redirects to HTTPS; it does not implement an ACME challenge.
+- Standalone Nginx mode: a valid full chain and private key for the chosen application hostname. Put `fullchain.pem` and `privkey.pem` in `TLS_CERT_DIR`; these names are required by Nginx and the preflight. The port 80 listener redirects to HTTPS; it does not implement an ACME challenge. Existing Traefik mode instead uses its configured Let's Encrypt resolver and needs no local certificate mount.
 - Enough disk for PostgreSQL, Redis AOF, at least two backup archives, Docker images and logs. Start with roughly 2 vCPU/4 GiB RAM and size from Module 14 load measurements; do not increase concurrency without measuring. Reserve space for a restore test and offsite encrypted copies.
 - Backups on restricted storage outside the repository. Example: `/var/backups/uni-mail-hub`, owned by the container's UID 1000 and mode `0700`. Module 13 writes archives and sidecars mode `0600`. Do not mount them into Nginx or make them web-accessible.
 
@@ -23,15 +23,37 @@ Copy `.env.production.example` to `.env.production`, set mode `0600`, and replac
 
 Set `WEB_URL`, `UNI_MAIL_HUB_PUBLIC_URL` and `ALLOWED_ORIGINS` to the exact HTTPS application origin, with no trailing path. `API_URL=http://api:4000` is the fixed internal Compose target; production config rejects arbitrary private cleartext API targets. The session cookie is `Secure`, `HttpOnly`, `SameSite=Lax`, and host-only. Direct administrator login over raw HTTP is unsupported. CORS permits the configured HTTPS origin only; do not use a wildcard. `API_BIND_HOST=0.0.0.0` applies only inside the API container, whose port is not published.
 
-`POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_PASSWORD`, `BACKUP_HOST_DIR`, `TLS_CERT_DIR`, and `APP_VERSION` are read by Compose. Use absolute Linux paths for the host directories. `BACKUP_DIR=/backups` and `BACKUP_PG_MODE=native` are required inside `ops`. The example concurrency remains SMTP 5, IMAP 3, and one worker each for cPanel, monitoring and webhook delivery. `MONITORING_INTERVAL_MINUTES=10`; one worker process owns daily retention at 03:00 UTC when `RETENTION_ENABLED=true`. A Redis lease prevents duplicate retention execution, but deploy one worker replica unless scaling has been separately tested.
+`POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_PASSWORD`, `BACKUP_HOST_DIR`, and `APP_VERSION` are read by Compose. `TLS_CERT_DIR` is required only for standalone Nginx; set `EXTERNAL_TLS_TERMINATION=false` there. Use absolute Linux paths for host directories. `BACKUP_DIR=/backups` and `BACKUP_PG_MODE=native` are required inside `ops`. The example concurrency remains SMTP 5, IMAP 3, and one worker each for cPanel, monitoring and webhook delivery. `MONITORING_INTERVAL_MINUTES=10`; one worker process owns daily retention at 03:00 UTC when `RETENTION_ENABLED=true`. A Redis lease prevents duplicate retention execution, but deploy one worker replica unless scaling has been separately tested.
+
+## Existing Traefik
+
+Use [docker-compose.traefik.yml](../docker-compose.traefik.yml) only when the VPS already has Traefik v3.6.x with the Docker provider, `exposedByDefault=false`, external network `app_plane`, entrypoints `web` and `websecure`, and certificate resolver `letsencrypt`. The target hostname is `mailhub.unicodeit.com`. Set `WEB_URL`, `UNI_MAIL_HUB_PUBLIC_URL`, and `ALLOWED_ORIGINS` to `https://mailhub.unicodeit.com`; set `EXTERNAL_TLS_TERMINATION=true`. `TLS_CERT_DIR` may be omitted. Traefik handles Let's Encrypt through its existing HTTP challenge on `web`; Certbot is not used in this mode. Confirm the external network and Traefik configuration on the host before deployment; this repository does not create or modify them. Docker Compose v2.24.4 or newer is required for the override's `!override` mount replacement.
+
+Use both files for **every** Traefik-mode operation:
+
+```bash
+docker compose \
+  --env-file .env.production \
+  -f docker-compose.prod.yml \
+  -f docker-compose.traefik.yml config
+```
+
+The override disables built-in Nginx, attaches only web and API to `app_plane`, and keeps their `front`/`back` networks. It publishes neither application port. HTTPS `/api/v1/health`, exact `/api/v1/messages`, and `/api/v1/messages/*` go directly to API port 4000 at higher priority than the web router. All other paths, including administrator API routes, go through Next.js port 3000. The HTTP router redirects permanently to HTTPS. Traefik labels explicitly opt in only web and API; PostgreSQL, Redis, worker, and ops remain undiscovered.
+
+For fresh install use `bash scripts/deploy-production.sh --fresh --traefik`; for updates use `bash scripts/deploy-production.sh --update --traefik`. The scripts use the same migration, backup, health and smoke gates as standalone mode and do not start built-in Nginx. After initial 2FA enrollment, recreate `api web worker` using both Compose files and `--no-build`. For application rollback, use `bash scripts/rollback-production.sh --acknowledge-schema-compatibility --traefik` after confirming schema compatibility. Direct preflight and smoke commands are:
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.traefik.yml run --rm ops node scripts/production/check.mjs
+docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.traefik.yml run --rm ops node scripts/production/smoke.mjs
+```
 
 ## Fresh install
 
-1. Prepare the host, restricted directories, DNS, and TLS files. Do not overwrite mail-host DNS such as `mail.unicodeit.com`; use a separate application name such as `mailhub.unicodeit.com` pointing at the VPS public address.
+1. Prepare the host, restricted directories, DNS, and standalone Nginx TLS files. Do not overwrite mail-host DNS such as `mail.unicodeit.com`; use a separate application name such as `mailhub.unicodeit.com` pointing at the VPS public address. For the existing Traefik proxy, follow the mode above instead of preparing local certificate files.
 2. Copy the repository to the chosen directory and fill `.env.production`. Use a new, strong `SEED_ADMIN_PASSWORD`; no password is shipped in the template. Set `PRODUCTION_2FA_BOOTSTRAP=true` only for the first installation. Keep `SEED_ADMIN_*` values private.
-3. Run `bash scripts/deploy-production.sh --fresh` from the repository root. It checks Compose/config/certificate mounts, starts only PostgreSQL and Redis, validates the migration ledger, builds images, runs `prisma migrate deploy` once, creates the sole administrator, checks migration status, starts the four serving services, waits for health, and runs read-only HTTPS/API/heartbeat smoke checks. The fresh seed refuses a database containing any user; it does not create test projects, mail servers, messages, or API keys.
+3. For standalone Nginx, run `bash scripts/deploy-production.sh --fresh` from the repository root. It checks Compose/config/certificate mounts, starts only PostgreSQL and Redis, validates the migration ledger, builds images, runs `prisma migrate deploy` once, creates the sole administrator, checks migration status, starts the four serving services, waits for health, and runs read-only HTTPS/API/heartbeat smoke checks. The fresh seed refuses a database containing any user; it does not create test projects, mail servers, messages, or API keys. For Traefik, use `--fresh --traefik` as described above.
 4. Sign in through HTTPS with the seeded admin credentials. The first-install session can only use `auth/me`, logout, and the 2FA setup/status/verification endpoints. The UI opens `/settings`; enroll an authenticator, verify the code and save recovery codes in a protected place. The narrow bootstrap exception requires exactly one active, unprotected Super Admin and exactly one user, plus the explicit flag. It cannot open mail/admin routes before enrollment. In Settings, change the initial administrator password using the current password, a new unique password of at least 16 characters, and a current authenticator or recovery code. Other sessions are revoked. Do this immediately after enrollment.
-5. Remove the `SEED_ADMIN_*` values from `.env.production`, set `PRODUCTION_2FA_BOOTSTRAP=false`, then run `docker compose --env-file .env.production -f docker-compose.prod.yml up -d --no-build api web worker`. Run `pnpm production:check` and `pnpm production:smoke` from the repository with Docker available. Normal production API startup now requires all active Super Admins to have 2FA. The seed command must never be used as a password reset on an existing production DB.
+5. Remove the `SEED_ADMIN_*` values from `.env.production`, set `PRODUCTION_2FA_BOOTSTRAP=false`, then run `docker compose --env-file .env.production -f docker-compose.prod.yml up -d --no-build api web worker`. Run `pnpm production:check` and `pnpm production:smoke` from the repository with Docker available. In Traefik mode, add `-f docker-compose.traefik.yml` to the Compose command and use the two-file preflight/smoke commands above. Normal production API startup now requires all active Super Admins to have 2FA. The seed command must never be used as a password reset on an existing production DB.
 
 The deployment script is intended for the later host installation. Do not run it against a real server while this local preparation task is under review.
 
@@ -43,7 +65,7 @@ To roll back application images, first confirm the prior version supports the cu
 
 ## Backups and operations
 
-`pnpm production:check` runs the one-shot `ops` container and verifies production env/secret formats, private DB/Redis endpoint consistency, mounted backup and TLS paths, DB/Redis connectivity, migration checksums/status, administrator 2FA state, and decryptability of stored encrypted credentials without printing plaintext. `pnpm production:smoke` performs a read-only HTTPS login-page check, internal API dependency health check and Redis worker heartbeat check. It sends no email and does not authenticate. Use `docker compose --env-file .env.production -f docker-compose.prod.yml run --rm ops node scripts/ops/backup.mjs` for a verified backup. On an isolated **nonproduction** copy only, override `NODE_ENV=test` and use `scripts/ops/restore-test.mjs --backup /backups/<archive>` to restore into a temporary database and verify integrity. The restore-test script rejects production mode. Schedule daily backup on the host using the approved scheduler and copy verified archives to encrypted off-host storage. Keep backup and Docker log rotation under observation; Compose json-file logs are capped at 10 MiB × 5 per service.
+`pnpm production:check` runs the standalone one-shot `ops` container and verifies production env/secret formats, private DB/Redis endpoint consistency, mounted backup and TLS paths, DB/Redis connectivity, migration checksums/status, administrator 2FA state, and decryptability of stored encrypted credentials without printing plaintext. In Traefik mode use the two-file command above; with `EXTERNAL_TLS_TERMINATION=true`, it reports external TLS termination instead of checking local certificate files. All other checks remain active. `pnpm production:smoke` performs a read-only HTTPS login-page check, internal API dependency health check and Redis worker heartbeat check; use the two-file form in Traefik mode. It sends no email and does not authenticate. Use `docker compose --env-file .env.production -f docker-compose.prod.yml run --rm ops node scripts/ops/backup.mjs` for a verified standalone backup, or add the override file for Traefik. On an isolated **nonproduction** copy only, override `NODE_ENV=test` and use `scripts/ops/restore-test.mjs --backup /backups/<archive>` to restore into a temporary database and verify integrity. The restore-test script rejects production mode. Schedule daily backup on the host using the approved scheduler and copy verified archives to encrypted off-host storage. Keep backup and Docker log rotation under observation; Compose json-file logs are capped at 10 MiB × 5 per service.
 
 See [operations.md](operations.md) for commands, logs and incident steps.
 
@@ -51,18 +73,18 @@ See [operations.md](operations.md) for commands, logs and incident steps.
 
 Review the firewall before exposing the host: normally public TCP 80/443 and restricted SSH 22 only. Do not publish 5432, 6379, 3000 or 4000. Prefer SSH keys, a restricted sudo account and no direct root/password login where operationally appropriate. These are future host instructions; this repository changes no firewall or SSH settings.
 
-Other projects, including Bunevia, should use `UNI_MAIL_HUB_URL=https://<application-host>`, `UNI_MAIL_HUB_API_KEY`, and `UNI_MAIL_HUB_MAILBOX_ID`; they do not need SMTP credentials. A host process or a container in a separate Compose project can use the public HTTPS endpoint. `127.0.0.1` inside another container means that container itself. A deliberately shared private Docker network could use an internal API URL, but must be configured explicitly and kept private; the default deployment does not join another project's network. A separate VPS uses public HTTPS. The public proxy routes the API-key-protected `/api/v1/messages` endpoints directly to NestJS and leaves browser administrator calls through the cookie relay.
+Other projects, including Bunevia, should use `UNI_MAIL_HUB_URL=https://<application-host>`, `UNI_MAIL_HUB_API_KEY`, and `UNI_MAIL_HUB_MAILBOX_ID`; they do not need SMTP credentials. A host process or a container in a separate Compose project can use the public HTTPS endpoint. `127.0.0.1` inside another container means that container itself. A deliberately shared private Docker network could use an internal API URL, but must be configured explicitly and kept private; standalone mode does not join another project's network, while Traefik mode joins only its shared proxy network. A separate VPS uses public HTTPS. The public proxy routes the API-key-protected `/api/v1/messages` endpoints directly to NestJS and leaves browser administrator calls through the cookie relay.
 
 ## Go-live checklist
 
 - [ ] Application domain selected; DNS points to intended VPS without changing existing mail DNS
-- [ ] Valid certificate/key installed and renewal procedure verified
+- [ ] TLS mode selected: standalone certificate/key installed and renewal tested, or existing Traefik resolver/HTTP challenge verified
 - [ ] `.env.production` populated with independent strong secrets, mode `0600`
 - [ ] Encryption key backed up separately
 - [ ] Admin password strong; 2FA enrolled; recovery codes stored; bootstrap flag disabled
 - [ ] PostgreSQL, Redis and internal API ports remain unpublished
 - [ ] Firewall/SSH baseline reviewed
-- [ ] `pnpm production:check` and `pnpm production:smoke` pass
+- [ ] Production preflight and smoke pass using the Compose files for the selected mode
 - [ ] Prisma migrations clean; verified backup exists; isolated restore test passed
 - [ ] Backup schedule and encrypted offsite copy configured
 - [ ] Worker heartbeat, queue health, retention schedule and disk/log usage checked
