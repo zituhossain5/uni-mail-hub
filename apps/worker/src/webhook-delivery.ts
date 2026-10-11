@@ -15,8 +15,8 @@ export function deliveryDecision(status: number, attempt: number, maxAttempts: n
   return { status: 'RETRY_SCHEDULED' as const, delaySeconds: retryAfter === null ? seconds : Math.max(seconds, retryAfter) };
 }
 
-export async function dispatchWebhookDeliveries(db: PrismaClient, queue: Queue) {
-  const stale = new Date(Date.now() - 120000);
+export async function dispatchWebhookDeliveries(db: PrismaClient, queue: Queue, staleSeconds = 120) {
+  const stale = new Date(Date.now() - staleSeconds * 1000);
   await db.webhookDelivery.updateMany({ where: { status: 'DELIVERING', lastAttemptAt: { lt: stale } }, data: { status: 'RETRY_SCHEDULED', nextAttemptAt: new Date(), errorCode: 'WEBHOOK_DELIVERY_INTERRUPTED', errorMessage: 'Delivery interrupted; retry scheduled.' } });
   const due = await db.webhookDelivery.findMany({ where: { status: { in: ['PENDING', 'RETRY_SCHEDULED'] }, nextAttemptAt: { lte: new Date() } }, select: { id: true, attemptCount: true }, orderBy: { createdAt: 'asc' }, take: 50 });
   for (const item of due) await queue.add('deliver', { deliveryId: item.id }, { jobId: `${item.id}-${item.attemptCount + 1}`, removeOnComplete: { age: 86400, count: 10000 }, removeOnFail: { age: 86400, count: 10000 } });

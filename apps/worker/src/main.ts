@@ -14,6 +14,7 @@ import { randomUUID } from 'node:crypto';
 import { dispatchWebhookDeliveries, processWebhookDelivery } from './webhook-delivery';
 import { emitWebhookEvent } from './webhook-events';
 import { runRetention, withRetentionLease } from './retention';
+import { preSmtpMarker, smtpPendingMarker, recoverStaleOutgoing, safeSmtpFailure } from './recovery';
 
 const config = readConfig();
 const key = decodeEncryptionKey(config.MAIL_CREDENTIAL_ENCRYPTION_KEY);
@@ -77,8 +78,8 @@ function scheduleRetention() {
 async function scheduleMonitoring() {
   try {
     if (!await connection.exists('monitor:run:lease')) {
-      await db.monitoringRun.updateMany({ where: { status: 'RUNNING', startedAt: { lt: new Date(Date.now() - 30000) } }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'MONITORING_INTERRUPTED' } });
-      await db.monitoringRun.updateMany({ where: { status: 'QUEUED', createdAt: { lt: new Date(Date.now() - 120000) } }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'MONITORING_QUEUE_STALE' } });
+      await db.monitoringRun.updateMany({ where: { status: 'RUNNING', startedAt: { lt: new Date(Date.now() - config.MONITORING_RUN_STALE_SECONDS * 1000) } }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'MONITORING_INTERRUPTED' } });
+      await db.monitoringRun.updateMany({ where: { status: 'QUEUED', createdAt: { lt: new Date(Date.now() - config.MONITORING_QUEUED_STALE_SECONDS * 1000) } }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'MONITORING_QUEUE_STALE' } });
     }
     if (await db.monitoringRun.findFirst({ where: { status: { in: ['QUEUED', 'RUNNING'] } }, select: { id: true } })) return;
     if (await db.monitoringRun.findFirst({ where: { createdAt: { gte: new Date(Date.now() - config.MONITORING_INTERVAL_MINUTES * 60000) } }, select: { id: true } })) return;
@@ -123,21 +124,17 @@ async function dispatchOutbox() {
     }
   } catch (error) { log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'outbox dispatch deferred'); }
   finally { dispatching = false; }
-  try { await dispatchWebhookDeliveries(db, webhookQueue); }
+  try { await dispatchWebhookDeliveries(db, webhookQueue, config.WEBHOOK_DELIVERING_STALE_SECONDS); }
   catch (error) { log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'webhook dispatch deferred'); }
 }
 
 async function recoverStale() {
-  const staleBefore = new Date(Date.now() - 120000);
-  const stale = await db.outgoingMessage.findMany({ where: { status: 'PROCESSING', processingAt: { lt: staleBefore } }, select: { id: true }, take: 50 });
-  for (const item of stale) await db.$transaction(async tx => {
-    const changed = await tx.outgoingMessage.updateMany({ where: { id: item.id, status: 'PROCESSING', processingAt: { lt: staleBefore } }, data: { status: 'RETRY_SCHEDULED', lastErrorCode: 'PROCESSING_INTERRUPTED', lastErrorMessage: 'Worker interrupted before confirming SMTP result.' } });
-    if (changed.count) await tx.outboxEvent.create({ data: { messageId: item.id } });
-  });
+  const result = await recoverStaleOutgoing(db, config.MAIL_PROCESSING_STALE_SECONDS);
+  if (result.requeued || result.accepted || result.uncertain) log.warn(result, 'stale outgoing messages reconciled');
 }
 
 async function processMessage(messageId: string) {
-  const claimed = await db.outgoingMessage.updateMany({ where: { id: messageId, status: { in: ['QUEUED', 'RETRY_SCHEDULED'] } }, data: { status: 'PROCESSING', processingAt: new Date(), attemptCount: { increment: 1 } } });
+  const claimed = await db.outgoingMessage.updateMany({ where: { id: messageId, status: { in: ['QUEUED', 'RETRY_SCHEDULED'] } }, data: { status: 'PROCESSING', processingAt: new Date(), attemptCount: { increment: 1 }, lastErrorCode: preSmtpMarker, lastErrorMessage: null } });
   if (!claimed.count) return;
   const message = await db.outgoingMessage.findUniqueOrThrow({ where: { id: messageId }, include: { recipients: true, fromMailbox: { include: { mailServer: true, credential: true } } } });
   const startedAt = new Date();
@@ -145,6 +142,7 @@ async function processMessage(messageId: string) {
   let accepted: string[] = []; let rejected: string[] = []; let pending: string[] = [];
   let rfcMessageId: string | null = null; let responseCode: number | null = null;
   let failure: ReturnType<typeof classifySendError> | null = null;
+  let smtpInvoked = false;
   try {
     const suppressed = await db.suppression.findFirst({ where: { projectId: message.projectId, email: { in: message.recipients.map(item => item.email.toLowerCase()) } }, select: { id: true } });
     if (suppressed) throw { code: 'RECIPIENT_SUPPRESSED' };
@@ -155,6 +153,9 @@ async function processMessage(messageId: string) {
     if (server.smtpAuthMode === 'PASSWORD' && !mailbox.credential) throw { code: 'MAIL_CREDENTIAL_NOT_CONFIGURED' };
     const auth = server.smtpAuthMode === 'PASSWORD' ? { user: mailbox.credential!.username, pass: decryptSecret(mailbox.credential!, key) } : null;
     const recipients = (type: 'TO' | 'CC' | 'BCC') => message.recipients.filter(item => item.type === type).map(item => ({ email: item.email, name: item.name }));
+    const marked = await db.outgoingMessage.updateMany({ where: { id: messageId, status: 'PROCESSING', attemptCount: message.attemptCount, lastErrorCode: preSmtpMarker }, data: { lastErrorCode: smtpPendingMarker, processingAt: new Date() } });
+    if (!marked.count) return;
+    smtpInvoked = true;
     const result = await sendSmtp({ endpoint: { host: server.smtpHost, port: server.smtpPort, security: server.smtpSecurity }, auth, from: { email: mailbox.email, name: mailbox.displayName }, to: recipients('TO'), cc: recipients('CC'), bcc: recipients('BCC'), replyTo: message.replyToEmail ? { email: message.replyToEmail, name: message.replyToName } : null, subject: message.subject, text: message.textBody, html: message.htmlBody, inReplyTo: message.inReplyTo, references: message.references });
     accepted = result.accepted; rejected = result.rejected; pending = result.pending; rfcMessageId = result.messageId; responseCode = result.responseCode;
     if (!accepted.length) throw { code: 'SMTP_RECIPIENT_REJECTED', responseCode: responseCode ?? 550 };
@@ -162,7 +163,7 @@ async function processMessage(messageId: string) {
     const code = (error as { code?: string })?.code;
     if (['MAILBOX_DISABLED', 'MAIL_SERVER_DISABLED', 'INSECURE_MAIL_SERVER', 'MAIL_CREDENTIAL_NOT_CONFIGURED', 'CREDENTIAL_DECRYPTION_FAILED', 'RECIPIENT_SUPPRESSED'].includes(code ?? '') || (error instanceof Error && error.message === 'CREDENTIAL_DECRYPTION_FAILED')) {
       const safe = code ?? 'CREDENTIAL_DECRYPTION_FAILED'; failure = { code: safe, message: safe.replaceAll('_', ' ').toLowerCase(), retryable: false, smtpResponseCode: null };
-    } else failure = classifySendError(error);
+    } else failure = safeSmtpFailure(classifySendError(error), smtpInvoked);
   }
   const finishedAt = new Date();
   const latencyMs = finishedAt.getTime() - startedAt.getTime();
@@ -171,16 +172,16 @@ async function processMessage(messageId: string) {
       const retry = failure.retryable && message.attemptCount < config.MAIL_SEND_MAX_ATTEMPTS;
       await tx.smtpAttempt.create({ data: { messageId, mailboxId: mailbox.id, attemptNumber: message.attemptCount, status: 'FAILED', startedAt, finishedAt, latencyMs, smtpResponseCode: failure.smtpResponseCode, smtpResponse: failure.smtpResponseCode ? `SMTP ${failure.smtpResponseCode}` : null, errorCode: failure.code, errorMessage: failure.message } });
       if (failure.code === 'SMTP_RECIPIENT_REJECTED') await tx.outgoingRecipient.updateMany({ where: { messageId }, data: { smtpStatus: 'REJECTED', smtpResponse: failure.message } });
-      await tx.outgoingMessage.update({ where: { id: messageId }, data: { status: retry ? 'RETRY_SCHEDULED' : 'FAILED', lastErrorCode: failure.code, lastErrorMessage: failure.message, failedAt: retry ? null : finishedAt } });
+      await tx.outgoingMessage.update({ where: { id: messageId }, data: { status: retry ? 'RETRY_SCHEDULED' : 'FAILED', processingAt: null, lastErrorCode: failure.code, lastErrorMessage: failure.message, failedAt: retry ? null : finishedAt } });
       if (retry) await tx.outboxEvent.create({ data: { messageId, availableAt: new Date(Date.now() + config.MAIL_SEND_BACKOFF_BASE_MS * 2 ** (message.attemptCount - 1)) } });
-      else await emitWebhookEvent(tx, { projectId: message.projectId, eventKey: `mail.failed:${messageId}`, type: 'mail.failed', resourceType: 'OutgoingMessage', resourceId: messageId, payload: { messageId, mailboxId: mailbox.id, recipients: message.recipients.filter(item => item.type !== 'BCC').map(item => ({ email: item.email, type: item.type, status: failure.code === 'SMTP_RECIPIENT_REJECTED' ? 'REJECTED' : item.smtpStatus })), failureCode: failure.code, timestamp: finishedAt.toISOString() } });
+      else if (failure.code !== 'SMTP_OUTCOME_UNKNOWN') await emitWebhookEvent(tx, { projectId: message.projectId, eventKey: `mail.failed:${messageId}`, type: 'mail.failed', resourceType: 'OutgoingMessage', resourceId: messageId, payload: { messageId, mailboxId: mailbox.id, recipients: message.recipients.filter(item => item.type !== 'BCC').map(item => ({ email: item.email, type: item.type, status: failure.code === 'SMTP_RECIPIENT_REJECTED' ? 'REJECTED' : item.smtpStatus })), failureCode: failure.code, timestamp: finishedAt.toISOString() } });
     } else {
       const acceptedSet = new Set(accepted);
       const rejectedSet = new Set([...rejected, ...pending, ...message.recipients.filter(item => !acceptedSet.has(item.email.toLowerCase())).map(item => item.email.toLowerCase())]);
       const partial = rejectedSet.size > 0;
       await tx.smtpAttempt.create({ data: { messageId, mailboxId: mailbox.id, attemptNumber: message.attemptCount, status: partial ? 'PARTIAL' : 'ACCEPTED', startedAt, finishedAt, latencyMs, smtpResponseCode: responseCode, smtpResponse: responseCode ? `SMTP ${responseCode}` : 'SMTP accepted', messageIdHeader: rfcMessageId } });
       for (const recipient of message.recipients) await tx.outgoingRecipient.update({ where: { id: recipient.id }, data: { smtpStatus: rejectedSet.has(recipient.email.toLowerCase()) ? 'REJECTED' : 'ACCEPTED', smtpResponse: rejectedSet.has(recipient.email.toLowerCase()) ? 'Rejected by SMTP server' : 'Accepted by SMTP server' } });
-      await tx.outgoingMessage.update({ where: { id: messageId }, data: { status: partial ? 'SMTP_ACCEPTED_WITH_REJECTIONS' : 'SMTP_ACCEPTED', smtpAcceptedAt: finishedAt, rfcMessageId, lastErrorCode: partial ? 'PARTIAL_RECIPIENT_REJECTION' : null, lastErrorMessage: partial ? 'Some recipients were rejected by SMTP; accepted recipients will not be resent.' : null } });
+      await tx.outgoingMessage.update({ where: { id: messageId }, data: { status: partial ? 'SMTP_ACCEPTED_WITH_REJECTIONS' : 'SMTP_ACCEPTED', processingAt: null, failedAt: null, smtpAcceptedAt: finishedAt, rfcMessageId, lastErrorCode: partial ? 'PARTIAL_RECIPIENT_REJECTION' : null, lastErrorMessage: partial ? 'Some recipients were rejected by SMTP; accepted recipients will not be resent.' : null } });
       await emitWebhookEvent(tx, { projectId: message.projectId, eventKey: `mail.smtp_accepted:${messageId}`, type: 'mail.smtp_accepted', resourceType: 'OutgoingMessage', resourceId: messageId, payload: { messageId, mailboxId: mailbox.id, recipients: message.recipients.filter(item => item.type !== 'BCC').map(item => ({ email: item.email, type: item.type, status: rejectedSet.has(item.email.toLowerCase()) ? 'REJECTED' : 'SMTP_ACCEPTED' })), timestamp: finishedAt.toISOString() } });
     }
   });

@@ -4,7 +4,7 @@ import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { NestFactory } from '@nestjs/core';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import { JwtModule } from '@nestjs/jwt';
-import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
+import { SkipThrottle, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import helmet from 'helmet';
 import { randomUUID } from 'node:crypto';
 import { UserRole } from '@uni/database';
@@ -35,6 +35,7 @@ const throttleStorage = new RedisThrottleStorage(config.REDIS_URL);
 class HealthController {
   constructor(@Inject(Database) private readonly db: Database, @Inject(RedisConnection) private readonly redis: RedisConnection) {}
   @Public()
+  @SkipThrottle()
   @Get()
   async health() {
     const [database, redis] = await Promise.allSettled([this.db.$queryRaw`SELECT 1`, this.redis.client.ping()]);
@@ -53,6 +54,7 @@ class AppModule {}
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: new JsonLogger() });
+  app.enableShutdownHooks(['SIGTERM', 'SIGINT']);
   app.setGlobalPrefix('api/v1');
   app.useBodyParser('json', { limit: '2mb' });
   app.use(helmet({ hsts: config.NODE_ENV === 'production' }));

@@ -13,6 +13,12 @@ type Config = ReturnType<typeof readConfig>;
 const severity: Record<Health, number> = { HEALTHY: 0, UNKNOWN: 1, WARNING: 2, CRITICAL: 3 };
 const overall = (checks: Check[]): Health => checks.reduce<Health>((state, check) => severity[check.status] > severity[state] ? check.status : state, 'HEALTHY');
 
+export async function renewMonitoringLease(redis: Pick<Redis, 'get' | 'expire' | 'set'>, runId: string) {
+  const value = await redis.get('monitor:run:lease');
+  if (value === runId) await redis.expire('monitor:run:lease', 90);
+  else if (value === null) await redis.set('monitor:run:lease', runId, 'EX', 90, 'NX');
+}
+
 async function record(db: PrismaClient, runId: string, targetType: string, targetId: string, targetName: string, checkType: string, check: Check) {
   const now = new Date();
   await db.$transaction(async tx => {
@@ -44,7 +50,7 @@ export async function processMonitoringRun(db: PrismaClient, redis: Redis, confi
     await db.monitoringRun.update({ where: { id: runId }, data: { status: 'FAILED', completedAt: new Date(), errorCode: 'MONITORING_OVERLAP' } });
     return;
   }
-  const renew = setInterval(() => { void redis.get('monitor:run:lease').then(value => value === runId ? redis.expire('monitor:run:lease', 90) : undefined).catch(() => undefined); }, 20000);
+  const renew = setInterval(() => { void renewMonitoringLease(redis, runId).catch(() => undefined); }, 20000);
   let resultCount = 0;
   let partial = false;
   const put = async (type: string, id: string, name: string, checkType: string, check: Check) => {
