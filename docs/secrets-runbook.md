@@ -22,4 +22,7 @@ For a non-destructive preflight today, run `pnpm security:check`. It validates t
 
 ## Other credentials
 
+For disaster recovery, preserve the original encryption key exactly. The PostgreSQL and Redis URLs, web/API/CORS URLs, TLS configuration, and JWT signing secret are also needed to rebuild the service. Database and Redis passwords can be rotated once connectivity is re-established. A new JWT signing secret invalidates existing sessions and requires users to sign in again. A replacement encryption key cannot decrypt existing ciphertext; use the reviewed re-encryption procedure above. Keep secret backups separate from database dumps and verify authorized retrieval during a recovery drill. See [backup-restore.md](backup-restore.md) and [disaster-recovery.md](disaster-recovery.md).
+
+
 JWT signing-secret rotation invalidates existing JWTs; revoke session records and require re-login. Redis and PostgreSQL URL credentials should be rotated with private-network connection tests. API-key rotation is create → update client → verify → revoke old. Webhook secret rotation is one-time display → update receiver → verify signed test → retire old, with a controlled overlap only if the receiver supports it. Rotate the raw Uni Mail API key formerly tracked in `access.txt`; removal from the current tree does not remove it from Git history.

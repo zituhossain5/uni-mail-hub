@@ -13,6 +13,7 @@ import { processMonitoringRun } from './monitoring';
 import { randomUUID } from 'node:crypto';
 import { dispatchWebhookDeliveries, processWebhookDelivery } from './webhook-delivery';
 import { emitWebhookEvent } from './webhook-events';
+import { runRetention, withRetentionLease } from './retention';
 
 const config = readConfig();
 const key = decodeEncryptionKey(config.MAIL_CREDENTIAL_ENCRYPTION_KEY);
@@ -32,6 +33,8 @@ let timer: NodeJS.Timeout | undefined;
 let syncTimer: NodeJS.Timeout | undefined;
 let monitoringTimer: NodeJS.Timeout | undefined;
 let heartbeatTimer: NodeJS.Timeout | undefined;
+let retentionStartTimer: NodeJS.Timeout | undefined;
+let retentionTimer: NodeJS.Timeout | undefined;
 let dispatching = false;
 let syncScheduleTask: Promise<void> | null = null;
 
@@ -53,6 +56,22 @@ async function scheduleSync() {
 async function heartbeat() {
   const lastHeartbeatAt = new Date().toISOString();
   await connection.set('monitor:worker:last', JSON.stringify({ workerId, workerType: 'mail', startedAt: workerStartedAt, lastHeartbeatAt }), 'EX', config.MONITOR_WORKER_HEARTBEAT_SECONDS * 2);
+}
+
+function scheduleRetention() {
+  if (!config.RETENTION_ENABLED) return;
+  const run = () => {
+    void withRetentionLease(config.REDIS_URL, () => runRetention(db, config, false))
+      .then(result => log.info(result, 'retention cleanup completed'))
+      .catch(error => log.warn({ errorType: error instanceof Error ? error.message === 'RETENTION_ALREADY_RUNNING' ? 'RETENTION_ALREADY_RUNNING' : error.name : typeof error }, 'retention cleanup deferred'));
+  };
+  const next = new Date();
+  next.setUTCHours(3, 0, 0, 0);
+  if (next.getTime() <= Date.now()) next.setUTCDate(next.getUTCDate() + 1);
+  retentionStartTimer = setTimeout(() => {
+    run();
+    retentionTimer = setInterval(run, 86_400_000);
+  }, next.getTime() - Date.now());
 }
 
 async function scheduleMonitoring() {
@@ -175,6 +194,8 @@ async function shutdown() {
   if (syncTimer) clearInterval(syncTimer);
   if (monitoringTimer) clearInterval(monitoringTimer);
   if (heartbeatTimer) clearInterval(heartbeatTimer);
+  if (retentionStartTimer) clearTimeout(retentionStartTimer);
+  if (retentionTimer) clearInterval(retentionTimer);
   if (syncScheduleTask) await syncScheduleTask;
   await Promise.all(workers.map(worker => worker.close()));
   await queue.close(); await syncQueue.close(); await cpanelQueue.close(); await monitoringQueue.close(); await webhookQueue.close(); await connection.quit(); await db.$disconnect();
@@ -203,6 +224,7 @@ async function main() {
   await triggerSyncSchedule();
   await heartbeat();
   await scheduleMonitoring();
+  scheduleRetention();
   timer = setInterval(() => { void recoverStale().then(dispatchOutbox).catch(error => log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'reconciliation deferred')); }, 5000);
   syncTimer = setInterval(() => { void triggerSyncSchedule(); }, config.MAIL_SYNC_INTERVAL_MINUTES * 60000);
   heartbeatTimer = setInterval(() => { void heartbeat().catch(error => log.warn({ errorType: error instanceof Error ? error.name : typeof error }, 'worker heartbeat deferred')); }, 20000);

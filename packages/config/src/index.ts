@@ -38,6 +38,17 @@ const schema = z.object({
   WEBHOOK_MAX_ATTEMPTS: z.coerce.number().int().min(1).max(10).default(5),
   WEBHOOK_TIMEOUT_MS: z.coerce.number().int().min(1000).max(30000).default(10000),
   WEBHOOK_RESPONSE_MAX_BYTES: z.coerce.number().int().min(256).max(65536).default(4096),
+  RETENTION_ENABLED: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
+  RETENTION_BATCH_SIZE: z.coerce.number().int().min(1).max(1000).default(500),
+  RETENTION_MAX_ROWS_PER_RUN: z.coerce.number().int().min(1).max(100000).default(10000),
+  RETENTION_MONITORING_DAYS: z.coerce.number().int().min(1).default(90),
+  RETENTION_AUDIT_DAYS: z.coerce.number().int().min(30).default(365),
+  RETENTION_WEBHOOK_DELIVERY_DAYS: z.coerce.number().int().min(1).default(90),
+  RETENTION_WEBHOOK_EVENT_DAYS: z.coerce.number().int().min(1).default(180),
+  RETENTION_SYNC_RUN_DAYS: z.coerce.number().int().min(1).default(90),
+  RETENTION_CONNECTION_CHECK_DAYS: z.coerce.number().int().min(1).default(90),
+  RETENTION_SMTP_ATTEMPT_DAYS: z.coerce.number().int().min(1).default(180),
+  RETENTION_OUTGOING_MESSAGE_DAYS: z.coerce.number().int().min(1).default(365),
 });
 
 export function readConfig() {

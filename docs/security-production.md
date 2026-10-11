@@ -47,6 +47,12 @@ For suspected exposure, stop affected integrations, preserve a restricted eviden
 The boxes below are deployment gates, not claims about a VPS:
 
 - [ ] Production environment validated on the target host with `pnpm security:check`
+- [ ] External encrypted backup directory configured with restricted permissions
+- [ ] Latest PostgreSQL backup and checksum verified
+- [ ] Non-production restore test passed against a recent archive
+- [ ] Encryption key backed up separately and recoverable by authorized operators
+- [ ] Retention policy and dry-run counts reviewed before enabling cleanup
+- [ ] Disaster recovery runbook and off-server backup strategy reviewed
 - [ ] Encryption key backed up and restore tested
 - [ ] Every active SUPER_ADMIN enrolled in 2FA and recovery codes stored securely
 - [ ] HTTPS reverse proxy and secure cookies verified in production
