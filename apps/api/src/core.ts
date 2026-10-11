@@ -43,6 +43,12 @@ export class AuthGuard implements CanActivate {
       if (!user?.isActive) throw new UnauthorizedException();
       if (this.reflector.getAllAndOverride<boolean>('superAdmin', [context.getHandler(), context.getClass()]) && user.role !== UserRole.SUPER_ADMIN) throw new ForbiddenException();
       request.user = { id: user.id, role: user.role, email: user.email, name: user.name, sessionId: payload.sid };
+      if (process.env.NODE_ENV === 'production' && process.env.PRODUCTION_2FA_BOOTSTRAP === 'true' && user.role === UserRole.SUPER_ADMIN) {
+        const factor = await this.db.userSecurity.findUnique({ where: { userId: user.id }, select: { totpEnabledAt: true } });
+        if (!factor?.totpEnabledAt && !['/api/v1/auth/me', '/api/v1/auth/logout', '/api/v1/auth/security', '/api/v1/auth/2fa/setup', '/api/v1/auth/2fa/verify'].includes(request.path)) {
+          throw new ForbiddenException({ code: 'TWO_FACTOR_SETUP_REQUIRED', message: 'Complete two-factor setup before using the workspace' });
+        }
+      }
       if (Date.now() - session.lastUsedAt.getTime() > 60_000) await this.db.userSession.updateMany({ where: { id: payload.sid, revokedAt: null }, data: { lastUsedAt: new Date() } });
       return true;
     } catch (error) {

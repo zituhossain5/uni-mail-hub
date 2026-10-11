@@ -27,7 +27,7 @@ export default function LoginPage() {
       }
       const result: unknown = await response.json();
       if (typeof result === 'object' && result !== null && 'requiresTwoFactor' in result && result.requiresTwoFactor === true) { setRequiresTwoFactor(true); return; }
-      router.replace('/dashboard'); router.refresh();
+      router.replace(typeof result === 'object' && result !== null && 'requiresTwoFactorSetup' in result && result.requiresTwoFactorSetup === true ? '/settings' : '/dashboard'); router.refresh();
     } catch { setError('Unable to reach the server. Please try again.'); }
     finally { setLoading(false); }
   }

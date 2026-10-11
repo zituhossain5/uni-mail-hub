@@ -54,6 +54,7 @@ class AppModule {}
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: new JsonLogger() });
+  if (config.NODE_ENV === 'production') app.set('trust proxy', 1);
   app.enableShutdownHooks(['SIGTERM', 'SIGINT']);
   app.setGlobalPrefix('api/v1');
   app.useBodyParser('json', { limit: '2mb' });
@@ -71,13 +72,15 @@ async function bootstrap() {
   await app.init();
   if (config.NODE_ENV === 'production') {
     const database = app.get(Database);
-    const [admins, unprotected] = await Promise.all([
+    const [admins, unprotected, users] = await Promise.all([
       database.user.count({ where: { role: UserRole.SUPER_ADMIN, isActive: true } }),
       database.user.count({ where: { role: UserRole.SUPER_ADMIN, isActive: true, OR: [{ security: null }, { security: { totpEnabledAt: null } }] } }),
+      database.user.count(),
     ]);
-    if (!admins || unprotected) throw new Error('Production requires an active SUPER_ADMIN with 2FA enabled');
+    const freshBootstrap = config.PRODUCTION_2FA_BOOTSTRAP && admins === 1 && unprotected === 1 && users === 1;
+    if (!admins || (unprotected && !freshBootstrap)) throw new Error('Production requires an active SUPER_ADMIN with 2FA enabled');
   }
-  await app.listen(config.API_PORT, '127.0.0.1');
+  await app.listen(config.API_PORT, config.API_BIND_HOST);
 }
 
 bootstrap().catch((error: unknown) => { if (process.env.NODE_ENV === 'production') requestLogger.error({ errorType: error instanceof Error ? error.name : typeof error }, 'API startup failed'); else console.error(error); process.exit(1); });

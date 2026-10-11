@@ -12,6 +12,7 @@ async function seed() {
   try {
     const passwordHash = await argon2.hash(password!);
     await prisma.$transaction(async tx => {
+      if (process.env.NODE_ENV === 'production' && await tx.user.count()) throw new Error('PRODUCTION_SEED_REQUIRES_EMPTY_USERS');
       const user = await tx.user.upsert({
         where: { email: email! },
         create: { name: name!, email: email!, passwordHash, role: UserRole.SUPER_ADMIN },

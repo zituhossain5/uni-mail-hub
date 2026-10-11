@@ -12,6 +12,7 @@ import { AuthedRequest, Database, parse } from './core';
 const otpSchema = z.object({ code: z.string().trim().min(6).max(64) }).strict();
 const confirmationSchema = otpSchema.extend({ password: z.string().min(1) });
 const passwordSchema = z.object({ password: z.string().min(1) }).strict();
+const changePasswordSchema = z.object({ currentPassword: z.string().min(1), newPassword: z.string().min(16).max(256), code: z.string().trim().min(6).max(64) }).strict();
 const idSchema = z.string().cuid();
 const encryptionKey = () => decodeEncryptionKey(process.env.MAIL_CREDENTIAL_ENCRYPTION_KEY ?? '');
 const hashCode = (value: string) => createHash('sha256').update(value.replace(/[\s-]/g, '').toUpperCase()).digest('hex');
@@ -51,6 +52,24 @@ export class SecurityAuthController {
       this.db.userSession.findMany({ where: { userId, revokedAt: null, expiresAt: { gt: new Date() } }, select: { id: true, createdAt: true, lastUsedAt: true, expiresAt: true, ipAddress: true, userAgent: true }, orderBy: { createdAt: 'desc' }, take: 50 }),
     ]);
     return { twoFactorEnabled: !!factor?.totpEnabledAt, recoveryCodeCount: count, lastLoginAt: user.lastLoginAt, sessions: sessions.map(session => ({ ...session, current: session.id === request.user.sessionId })) };
+  }
+
+  @Post('password/change')
+  @Throttle({ default: { limit: 3, ttl: 60_000, blockDuration: 60_000 } })
+  async changePassword(@Req() request: AuthedRequest, @Body() body: unknown) {
+    if (request.user.role !== UserRole.SUPER_ADMIN) throw new HttpException({ code: 'FORBIDDEN', message: 'Administrator account required' }, 403);
+    const { currentPassword, newPassword, code } = parse(changePasswordSchema, body);
+    if (currentPassword === newPassword) throw new HttpException({ code: 'PASSWORD_REUSE', message: 'Choose a different password' }, 400);
+    const user = await this.db.user.findUniqueOrThrow({ where: { id: request.user.id }, include: { security: true } });
+    if (!(await argon2.verify(user.passwordHash, currentPassword)) || !user.security?.totpEnabledAt || !(await consumeSecondFactor(this.db, user.id, code, user.security))) throw new UnauthorizedException('Invalid credentials');
+    const passwordHash = await argon2.hash(newPassword);
+    await this.db.$transaction(async tx => {
+      const updated = await tx.user.updateMany({ where: { id: user.id, passwordHash: user.passwordHash }, data: { passwordHash } });
+      if (updated.count !== 1) throw new UnauthorizedException('Invalid credentials');
+      await tx.userSession.updateMany({ where: { userId: user.id, id: { not: request.user.sessionId }, revokedAt: null }, data: { revokedAt: new Date() } });
+      await tx.auditLog.create({ data: { userId: user.id, action: 'ADMIN_PASSWORD_CHANGED', entityType: 'User', entityId: user.id, ipAddress: request.ip } });
+    });
+    return { success: true };
   }
 
   @Post('2fa/setup')

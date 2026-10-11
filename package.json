@@ -5,9 +5,9 @@
   "packageManager": "pnpm@11.24.0",
   "scripts": {
     "dev": "dotenv -e .env -- concurrently -k -n api,web,worker \"pnpm --filter @uni/api dev\" \"pnpm --filter @uni/web dev\" \"pnpm --filter @uni/worker dev\"",
-    "build": "pnpm db:generate && pnpm --filter @uni/shared build && pnpm --filter @uni/config build && pnpm --filter @unicodeit/uni-mail build && pnpm --filter @uni/api build && pnpm --filter @uni/worker build && pnpm --filter @uni/web build",
+    "build": "pnpm db:generate && pnpm --filter @uni/shared build && pnpm --filter @uni/config build && pnpm --filter @uni/security build && pnpm --filter @uni/mail build && pnpm --filter @unicodeit/uni-mail build && pnpm --filter @uni/api build && pnpm --filter @uni/worker build && pnpm --filter @uni/web build",
     "lint": "eslint .",
-    "typecheck": "pnpm --filter @uni/shared build && pnpm --filter @uni/config build && pnpm --filter @unicodeit/uni-mail typecheck && pnpm --filter @uni/api typecheck && pnpm --filter @uni/worker typecheck && pnpm --filter @uni/web typecheck",
+    "typecheck": "pnpm --filter @uni/shared build && pnpm --filter @uni/config build && pnpm --filter @uni/security build && pnpm --filter @uni/mail build && pnpm --filter @unicodeit/uni-mail typecheck && pnpm --filter @uni/api typecheck && pnpm --filter @uni/worker typecheck && pnpm --filter @uni/web typecheck",
     "test": "pnpm typecheck && tsx scripts/mail-connectivity.test.ts && tsx scripts/sending.test.ts && tsx scripts/imap-sync.test.ts && tsx scripts/webmail.test.ts && tsx scripts/auto-read.test.ts && pnpm test:module6 && pnpm test:module8 && pnpm test:module9 && pnpm test:module10 && pnpm test:module11 && pnpm test:security && pnpm test:module13",
     "test:module8": "pnpm --filter @uni/api build && dotenv -e .env -- tsx scripts/cpanel.test.ts",
     "test:module9": "pnpm --filter @uni/api build && tsx scripts/monitoring.test.ts",
@@ -39,6 +39,8 @@
     "perf:test": "pnpm --filter @uni/config build && pnpm --filter @uni/api build && pnpm --filter @uni/worker build && dotenv -e .env -- node scripts/perf/module14.mjs run",
     "perf:cleanup": "dotenv -e .env -- node scripts/perf/module14.mjs cleanup",
     "recovery:test": "pnpm --filter @uni/config build && pnpm --filter @uni/api build && pnpm --filter @uni/worker build && dotenv -e .env -- node scripts/perf/module14.mjs run --recovery",
+    "production:check": "docker compose --env-file .env.production -f docker-compose.prod.yml run --rm ops node scripts/production/check.mjs",
+    "production:smoke": "docker compose --env-file .env.production -f docker-compose.prod.yml run --rm ops node scripts/production/smoke.mjs",
     "test:security:smoke": "dotenv -e .env -- tsx scripts/security-smoke.ts",
     "db:seed": "dotenv -e .env -- tsx packages/database/seed.ts",
     "db:studio": "dotenv -e .env -- pnpm --filter @uni/database exec prisma studio --schema prisma/schema.prisma",
@@ -65,6 +67,6 @@
     "typescript-eslint": "^8.0.0"
   },
   "dependencies": {
-    "@unicodeit/uni-mail": "link:packages\\uni-mail-client"
+    "@unicodeit/uni-mail": "workspace:*"
   }
 }

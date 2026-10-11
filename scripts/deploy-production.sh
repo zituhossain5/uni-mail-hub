@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd "$(dirname "$0")/.."
+mode="${1:-}"
+if [[ "$mode" != --fresh && "$mode" != --update || "$#" -ne 1 ]]; then
+  echo 'Usage: scripts/deploy-production.sh --fresh|--update' >&2
+  exit 2
+fi
+for tool in docker; do command -v "$tool" >/dev/null || { echo "Missing tool: $tool" >&2; exit 1; }; done
+docker compose version >/dev/null
+[[ -f .env.production ]] || { echo 'Missing .env.production' >&2; exit 1; }
+[[ -f deploy/nginx/uni-mail-hub.conf ]] || { echo 'Missing proxy config' >&2; exit 1; }
+dc() { docker compose --env-file .env.production -f docker-compose.prod.yml "$@"; }
+wait_healthy() {
+  local service="$1" container status
+  container="$(dc ps -q "$service")"
+  [[ -n "$container" ]] || { echo "Service missing: $service" >&2; return 1; }
+  for _ in {1..36}; do
+    status="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}{{.State.Status}}{{end}}' "$container")"
+    [[ "$status" == healthy ]] && { echo "Healthy: $service"; return 0; }
+    [[ "$status" == exited || "$status" == dead || "$status" == unhealthy ]] && { echo "Service failed: $service ($status)" >&2; return 1; }
+    sleep 5
+  done
+  echo "Health timeout: $service" >&2
+  return 1
+}
+
+dc config -q
+dc build ops
+dc run --rm --no-deps ops node scripts/production/check.mjs --config-only
+dc up -d postgres redis
+wait_healthy postgres
+wait_healthy redis
+dc run --rm ops node scripts/production/check.mjs --pre-migrate
+
+if [[ "$mode" == --update ]]; then
+  dc run --rm ops node scripts/ops/backup.mjs
+  echo 'Verified pre-migration backup created.'
+fi
+
+dc build api worker web
+dc run --rm ops node node_modules/prisma/build/index.js migrate deploy --schema packages/database/prisma/schema.prisma
+if [[ "$mode" == --fresh ]]; then
+  dc run --rm ops node node_modules/tsx/dist/cli.mjs packages/database/seed.ts
+  dc run --rm ops node scripts/production/check.mjs
+else
+  dc run --rm ops node scripts/production/check.mjs --require-enrolled
+fi
+
+dc up -d api worker web reverse-proxy
+for service in api worker web reverse-proxy; do wait_healthy "$service"; done
+dc run --rm ops node scripts/production/smoke.mjs
+echo 'Deployment checks passed. Keep the previous image tag and verified backup for rollback.'
+if [[ "$mode" == --fresh ]]; then
+  echo 'Complete administrator 2FA enrollment, save recovery codes, set PRODUCTION_2FA_BOOTSTRAP=false, and recreate API/web.'
+fi

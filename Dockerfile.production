@@ -1,0 +1,80 @@
+ARG NODE_IMAGE=node:24.13.0-bookworm-slim
+FROM ${NODE_IMAGE} AS base
+ENV PNPM_HOME=/pnpm
+ENV PATH=/pnpm:$PATH
+ENV CI=true
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/* \
+ && corepack enable && corepack prepare pnpm@11.24.0 --activate
+WORKDIR /app
+
+FROM base AS manifests
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json apps/api/package.json
+COPY apps/web/package.json apps/web/package.json
+COPY apps/worker/package.json apps/worker/package.json
+COPY packages/config/package.json packages/config/package.json
+COPY packages/database/package.json packages/database/package.json
+COPY packages/mail/package.json packages/mail/package.json
+COPY packages/security/package.json packages/security/package.json
+COPY packages/shared/package.json packages/shared/package.json
+COPY packages/uni-mail-client/package.json packages/uni-mail-client/package.json
+
+FROM manifests AS dependencies
+RUN pnpm install --frozen-lockfile
+
+FROM dependencies AS build
+COPY . .
+RUN pnpm --filter @uni/database exec prisma generate --schema prisma/schema.prisma \
+ && pnpm --filter @uni/shared build \
+ && pnpm --filter @uni/config build \
+ && pnpm --filter @uni/security build \
+ && pnpm --filter @uni/mail build \
+ && pnpm --filter @unicodeit/uni-mail build \
+ && pnpm --filter @uni/api build \
+ && pnpm --filter @uni/worker build \
+ && pnpm --filter @uni/web build
+
+FROM manifests AS production-dependencies
+ARG SERVICE=api
+RUN pnpm --filter @uni/${SERVICE}... install --prod --frozen-lockfile
+
+FROM node:24.13.0-bookworm-slim AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates \
+ && rm -rf /var/lib/apt/lists/*
+COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
+COPY --from=production-dependencies --chown=node:node /app/apps ./apps
+COPY --from=production-dependencies --chown=node:node /app/packages ./packages
+COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
+COPY --from=build --chown=node:node /app/packages/config/dist ./packages/config/dist
+COPY --from=build --chown=node:node /app/packages/security/dist ./packages/security/dist
+COPY --from=build --chown=node:node /app/packages/mail/dist ./packages/mail/dist
+COPY --from=build --chown=node:node /app/packages/database/generated ./packages/database/generated
+USER node
+
+FROM runtime AS api
+COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
+EXPOSE 4000
+CMD ["node", "apps/api/dist/main.js"]
+
+FROM runtime AS worker
+COPY --from=build --chown=node:node /app/apps/worker/dist ./apps/worker/dist
+COPY --chown=node:node apps/worker/health.mjs ./apps/worker/health.mjs
+CMD ["node", "apps/worker/dist/main.js"]
+
+FROM node:24.13.0-bookworm-slim AS web
+WORKDIR /app
+ENV NODE_ENV=production PORT=3000 HOSTNAME=0.0.0.0
+COPY --from=build --chown=node:node /app/apps/web/.next/standalone ./
+COPY --from=build --chown=node:node /app/apps/web/.next/static ./apps/web/.next/static
+USER node
+EXPOSE 3000
+CMD ["node", "apps/web/server.js"]
+
+FROM build AS ops
+RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client-15 ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN mkdir /backups && chown node:node /backups
+USER node
+CMD ["node", "scripts/production/check.mjs"]

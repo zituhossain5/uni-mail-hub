@@ -41,7 +41,7 @@ export class AuthController {
       return created;
     });
     const token = await this.jwt.signAsync({ sub: user.id, sid: session.id }, { expiresIn: '8h' });
-    return { token, user: { id: user.id, name: user.name, email: user.email, role: user.role } };
+    return { token, requiresTwoFactorSetup: process.env.NODE_ENV === 'production' && process.env.PRODUCTION_2FA_BOOTSTRAP === 'true' && user.role === 'SUPER_ADMIN' && !user.security?.totpEnabledAt, user: { id: user.id, name: user.name, email: user.email, role: user.role } };
   }
 
   @Get('me')

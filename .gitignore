@@ -7,9 +7,11 @@ coverage/
 .env
 .env.*
 !.env.example
+!.env.production.example
 *.log
 packages/database/generated/
 /.local-backups/
+/.local-production-test/
 *.dump
 *.sql.gz
 *.backup

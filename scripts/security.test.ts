@@ -25,6 +25,23 @@ test('production config rejects local origins and weak secrets without echoing t
   } finally { if (original === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = original; if (secret === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = secret; }
 });
 
+test('production config permits only the fixed Compose cleartext API endpoint', () => {
+  const names = ['NODE_ENV', 'DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'WEB_URL', 'UNI_MAIL_HUB_PUBLIC_URL', 'ALLOWED_ORIGINS', 'API_URL', 'MAIL_CREDENTIAL_ENCRYPTION_KEY'] as const;
+  const prior = Object.fromEntries(names.map(name => [name, process.env[name]]));
+  try {
+    Object.assign(process.env, {
+      NODE_ENV: 'production', DATABASE_URL: 'postgresql://u:p@postgres:5432/db', REDIS_URL: 'redis://redis:6379',
+      JWT_SECRET: '0123456789abcdef'.repeat(4), WEB_URL: 'https://hub.example.com', UNI_MAIL_HUB_PUBLIC_URL: 'https://hub.example.com',
+      ALLOWED_ORIGINS: 'https://hub.example.com', API_URL: 'http://api:4000', MAIL_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+    });
+    assert.equal(readConfig().API_URL, 'http://api:4000');
+    process.env.API_URL = 'http://other.internal:4000';
+    assert.throws(readConfig, /API_URL/);
+  } finally {
+    for (const name of names) if (prior[name] === undefined) delete process.env[name]; else process.env[name] = prior[name];
+  }
+});
+
 test('TOTP cannot be replayed and a recovery code can be used only once', async () => {
   const secret = authenticator.generateSecret();
   const encrypted = encryptSecret(secret, decodeEncryptionKey(process.env.MAIL_CREDENTIAL_ENCRYPTION_KEY!));
@@ -64,6 +81,31 @@ test('revoked and expired sessions cannot authorize requests', async () => {
   await assert.rejects(guard.canActivate(context));
   revokedAt = null; expiresAt = new Date(Date.now() - 1000);
   await assert.rejects(guard.canActivate(context));
+});
+
+test('fresh production admin is limited to 2FA enrollment until enabled', async () => {
+  const priorEnv = process.env.NODE_ENV;
+  const priorBootstrap = process.env.PRODUCTION_2FA_BOOTSTRAP;
+  process.env.NODE_ENV = 'production';
+  process.env.PRODUCTION_2FA_BOOTSTRAP = 'true';
+  try {
+    const db = {
+      userSession: { findUnique: async () => ({ userId: 'user', revokedAt: null, expiresAt: new Date(Date.now() + 60_000), lastUsedAt: new Date() }) },
+      user: { findUnique: async () => ({ id: 'user', role: 'SUPER_ADMIN', email: 'synthetic@example.invalid', name: 'Synthetic', isActive: true }) },
+      userSecurity: { findUnique: async () => ({ totpEnabledAt: null }) },
+    } as unknown as ConstructorParameters<typeof AuthGuard>[2];
+    const jwt = { verifyAsync: async () => ({ sub: 'user', sid: 'session' }) } as unknown as ConstructorParameters<typeof AuthGuard>[1];
+    const reflector = { getAllAndOverride: () => false } as unknown as ConstructorParameters<typeof AuthGuard>[0];
+    const guard = new AuthGuard(reflector, jwt, db);
+    const request = { headers: { authorization: 'Bearer synthetic' }, path: '/api/v1/dashboard' } as Record<string, unknown>;
+    const context = { getHandler: () => null, getClass: () => null, switchToHttp: () => ({ getRequest: () => request }) } as unknown as Parameters<AuthGuard['canActivate']>[0];
+    await assert.rejects(guard.canActivate(context), (error: unknown) => error instanceof Error && error.message.includes('Complete two-factor setup'));
+    request.path = '/api/v1/auth/2fa/setup';
+    assert.equal(await guard.canActivate(context), true);
+  } finally {
+    if (priorEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = priorEnv;
+    if (priorBootstrap === undefined) delete process.env.PRODUCTION_2FA_BOOTSTRAP; else process.env.PRODUCTION_2FA_BOOTSTRAP = priorBootstrap;
+  }
 });
 
 test('HTML and outbound webhook targets retain XSS and SSRF protections', () => {

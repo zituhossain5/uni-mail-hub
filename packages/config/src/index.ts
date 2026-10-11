@@ -10,6 +10,8 @@ const schema = z.object({
   UNI_MAIL_HUB_PUBLIC_URL: z.string().url().optional(),
   ALLOWED_ORIGINS: z.string().optional(),
   API_PORT: z.coerce.number().int().positive().default(4000),
+  API_BIND_HOST: z.enum(['127.0.0.1', '0.0.0.0']).default('127.0.0.1'),
+  PRODUCTION_2FA_BOOTSTRAP: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   MAIL_CREDENTIAL_ENCRYPTION_KEY: z.string().refine((value) => /^[A-Za-z0-9+/]{43}=$/.test(value) && Buffer.from(value, 'base64').length === 32 && Buffer.from(value, 'base64').toString('base64') === value, 'Must be a Base64-encoded 32-byte key'),
   MAIL_API_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(10000).default(60),
   MAIL_API_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(3600).default(60),
@@ -70,7 +72,8 @@ export function readConfig() {
     if (new URL(WEB_URL).protocol !== 'https:' || loopback(WEB_URL) || !safeBase(WEB_URL)) issues.push('WEB_URL');
     if (!UNI_MAIL_HUB_PUBLIC_URL || new URL(UNI_MAIL_HUB_PUBLIC_URL).protocol !== 'https:' || loopback(UNI_MAIL_HUB_PUBLIC_URL) || !safeBase(UNI_MAIL_HUB_PUBLIC_URL)) issues.push('UNI_MAIL_HUB_PUBLIC_URL');
     const internalApi = loopback(API_URL);
-    if (new URL(API_URL).protocol !== 'https:' && !(internalApi && new URL(API_URL).protocol === 'http:') || !safeBase(API_URL)) issues.push('API_URL');
+    const composeApi = API_URL === 'http://api:4000' || API_URL === 'http://api:4000/';
+    if (new URL(API_URL).protocol !== 'https:' && !((internalApi || composeApi) && new URL(API_URL).protocol === 'http:') || !safeBase(API_URL)) issues.push('API_URL');
     if (!ALLOWED_ORIGINS || !ALLOWED_ORIGINS.split(',').every(origin => { try { return new URL(origin.trim()).origin === origin.trim() && new URL(origin.trim()).protocol === 'https:'; } catch { return false; } })) issues.push('ALLOWED_ORIGINS');
     if (ALLOWED_ORIGINS && !ALLOWED_ORIGINS.split(',').map(value => value.trim()).includes(new URL(WEB_URL).origin)) issues.push('ALLOWED_ORIGINS');
     if (issues.length) throw new Error('Invalid production environment configuration: ' + [...new Set(issues)].join(', '));
