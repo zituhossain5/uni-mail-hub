@@ -4,7 +4,8 @@ services:
     profiles: [standalone-nginx]
 
   web:
-    networks: [front, app_plane]
+    networks:
+      app_plane:
     labels:
       traefik.enable: 'true'
       traefik.docker.network: app_plane
@@ -22,7 +23,8 @@ services:
       traefik.http.middlewares.uni-mail-hub-https-redirect.redirectscheme.permanent: 'true'
 
   api:
-    networks: [front, back, app_plane]
+    networks:
+      app_plane:
     labels:
       traefik.enable: 'true'
       traefik.docker.network: app_plane

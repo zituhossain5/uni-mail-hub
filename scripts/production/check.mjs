@@ -40,23 +40,25 @@ async function migrationLedger(db) {
 }
 
 async function main() {
+  const tlsMode = process.env.EXTERNAL_TLS_TERMINATION ?? 'false';
+  if (tlsMode !== 'true' && tlsMode !== 'false') fail('TLS_TERMINATION_MODE_INVALID');
+  if (tlsMode === 'true' && ['http://api:4000', 'http://api:4000/'].includes(process.env.API_URL)) fail('COMPOSE_API_URL_INVALID');
   const config = readConfig();
   if (config.NODE_ENV !== 'production') fail('NODE_ENV_NOT_PRODUCTION');
   if (!/^[A-Za-z0-9][A-Za-z0-9._-]{6,127}$/.test(process.env.APP_VERSION ?? '') || /replace|latest|test|dev/i.test(process.env.APP_VERSION ?? '')) fail('APP_VERSION_INVALID');
-  if (config.API_URL !== 'http://api:4000' && config.API_URL !== 'http://api:4000/') fail('COMPOSE_API_URL_INVALID');
+  const productionHost = (value, alias, legacy) => value === alias || (tlsMode === 'false' && value === legacy);
+  if (!productionHost(config.API_URL, 'http://uni-mail-hub-api:4000', 'http://api:4000') && !productionHost(config.API_URL, 'http://uni-mail-hub-api:4000/', 'http://api:4000/')) fail('COMPOSE_API_URL_INVALID');
   if (process.env.BACKUP_DIR !== '/backups' || process.env.BACKUP_PG_MODE !== 'native') fail('BACKUP_CONFIGURATION_INVALID');
   await access('/backups', constants.R_OK | constants.W_OK);
-  const tlsMode = process.env.EXTERNAL_TLS_TERMINATION ?? 'false';
-  if (tlsMode !== 'true' && tlsMode !== 'false') fail('TLS_TERMINATION_MODE_INVALID');
   if (tlsMode === 'false') {
     for (const file of ['/etc/nginx/tls/fullchain.pem', '/etc/nginx/tls/privkey.pem']) {
       if (!(await stat(file).catch(() => null))?.isFile()) fail('TLS_CERTIFICATE_MISSING');
     }
   }
   const dbUrl = new URL(config.DATABASE_URL);
-  if (dbUrl.hostname !== 'postgres' || dbUrl.port && dbUrl.port !== '5432' || decodeURIComponent(dbUrl.username) !== process.env.POSTGRES_USER || decodeURIComponent(dbUrl.password) !== process.env.POSTGRES_PASSWORD || decodeURIComponent(dbUrl.pathname.slice(1)) !== process.env.POSTGRES_DB) fail('DATABASE_SETTINGS_MISMATCH');
+  if (!productionHost(dbUrl.hostname, 'uni-mail-hub-postgres', 'postgres') || dbUrl.port && dbUrl.port !== '5432' || decodeURIComponent(dbUrl.username) !== process.env.POSTGRES_USER || decodeURIComponent(dbUrl.password) !== process.env.POSTGRES_PASSWORD || decodeURIComponent(dbUrl.pathname.slice(1)) !== process.env.POSTGRES_DB) fail('DATABASE_SETTINGS_MISMATCH');
   const redisUrl = new URL(config.REDIS_URL);
-  if (redisUrl.hostname !== 'redis' || redisUrl.port && redisUrl.port !== '6379') fail('REDIS_HOST_INVALID');
+  if (!productionHost(redisUrl.hostname, 'uni-mail-hub-redis', 'redis') || redisUrl.port && redisUrl.port !== '6379') fail('REDIS_HOST_INVALID');
   pass('Production configuration and secret formats');
   pass('Private database, Redis, and backup configuration');
   pass(tlsMode === 'true' ? 'TLS externally terminated' : 'TLS certificate files mounted');

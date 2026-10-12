@@ -25,15 +25,20 @@ test('production config rejects local origins and weak secrets without echoing t
   } finally { if (original === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = original; if (secret === undefined) delete process.env.JWT_SECRET; else process.env.JWT_SECRET = secret; }
 });
 
-test('production config permits only the fixed Compose cleartext API endpoint', () => {
-  const names = ['NODE_ENV', 'DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'WEB_URL', 'UNI_MAIL_HUB_PUBLIC_URL', 'ALLOWED_ORIGINS', 'API_URL', 'MAIL_CREDENTIAL_ENCRYPTION_KEY'] as const;
+test('production config permits only the fixed Compose API aliases and legacy endpoint', () => {
+  const names = ['NODE_ENV', 'DATABASE_URL', 'REDIS_URL', 'JWT_SECRET', 'WEB_URL', 'UNI_MAIL_HUB_PUBLIC_URL', 'ALLOWED_ORIGINS', 'API_URL', 'MAIL_CREDENTIAL_ENCRYPTION_KEY', 'EXTERNAL_TLS_TERMINATION'] as const;
   const prior = Object.fromEntries(names.map(name => [name, process.env[name]]));
   try {
     Object.assign(process.env, {
       NODE_ENV: 'production', DATABASE_URL: 'postgresql://u:p@postgres:5432/db', REDIS_URL: 'redis://redis:6379',
       JWT_SECRET: '0123456789abcdef'.repeat(4), WEB_URL: 'https://hub.example.com', UNI_MAIL_HUB_PUBLIC_URL: 'https://hub.example.com',
-      ALLOWED_ORIGINS: 'https://hub.example.com', API_URL: 'http://api:4000', MAIL_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+      ALLOWED_ORIGINS: 'https://hub.example.com', API_URL: 'http://uni-mail-hub-api:4000', MAIL_CREDENTIAL_ENCRYPTION_KEY: Buffer.alloc(32, 7).toString('base64'),
+      EXTERNAL_TLS_TERMINATION: 'true',
     });
+    assert.equal(readConfig().API_URL, 'http://uni-mail-hub-api:4000');
+    process.env.API_URL = 'http://api:4000';
+    assert.throws(readConfig, /API_URL/);
+    process.env.EXTERNAL_TLS_TERMINATION = 'false';
     assert.equal(readConfig().API_URL, 'http://api:4000');
     process.env.API_URL = 'http://other.internal:4000';
     assert.throws(readConfig, /API_URL/);

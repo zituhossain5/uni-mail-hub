@@ -4,7 +4,7 @@ This repository contains two Docker Compose deployment modes for a Linux VPS: st
 
 ## Architecture
 
-In standalone mode, `reverse-proxy` publishes 80/443 and terminates TLS. In Traefik mode, the existing shared proxy owns those ports and built-in Nginx is disabled. Both modes send browser traffic and administrator `/api/v1/*` calls to Next.js, whose existing relay holds the HttpOnly session cookie and calls NestJS on `http://api:4000`. Only `/api/v1/health` and API-key-protected `/api/v1/messages` and its subpaths reach NestJS directly. The worker owns the existing BullMQ processors and retention scheduler. PostgreSQL and Redis have no published ports and are attached only to the internal `back` network. The worker has a separate outbound network for SMTP, IMAP, webhooks, DNS, and cPanel. Web uses `front` to reach API; API joins `front` and the private data network. The `ops` image is one-shot and contains Prisma and PostgreSQL client tools; these are absent from the long-running API and worker images.
+In standalone mode, `reverse-proxy` publishes 80/443 and terminates TLS. In Traefik mode, the existing shared proxy owns those ports and built-in Nginx is disabled. Both modes send browser traffic and administrator `/api/v1/*` calls to Next.js, whose existing relay holds the HttpOnly session cookie and calls NestJS on `http://uni-mail-hub-api:4000`. Only `/api/v1/health` and API-key-protected `/api/v1/messages` and its subpaths reach NestJS directly. The worker owns the existing BullMQ processors and retention scheduler. PostgreSQL and Redis have no published ports and are attached only to the internal `back` network. The worker has a separate outbound network for SMTP, IMAP, webhooks, DNS, and cPanel. Web uses `front` to reach API; API joins `front` and the private data network. The `ops` image is one-shot and contains Prisma and PostgreSQL client tools; these are absent from the long-running API and worker images.
 
 The production image build uses Node 24.13.0, pnpm 11.24.0 and the lockfile. Runtime API/worker images contain production dependencies, compiled code and the generated Prisma client. The web image uses Next.js standalone output. The Docker context excludes `.env*`, backup archives, private keys, local stores and generated build output. Use an immutable `APP_VERSION` (release or commit identifier), retain the prior tag for rollback, and pin reviewed image digests before an actual deployment.
 
@@ -21,7 +21,7 @@ Keep `/opt/uni-mail-hub` and the populated `.env.production` restricted. A pract
 
 Copy `.env.production.example` to `.env.production`, set mode `0600`, and replace every placeholder. Do not commit or paste the populated file. Set `APP_VERSION` to a unique immutable release or commit tag. Generate `JWT_SECRET` with at least 48 random characters and `MAIL_CREDENTIAL_ENCRYPTION_KEY` as Base64 of 32 random bytes. Store the encryption key separately with its own recovery process; losing it makes mailbox, cPanel, webhook and 2FA secrets unreadable. URL-encode the PostgreSQL password in `DATABASE_URL` and use the same raw value in `POSTGRES_PASSWORD`. `production:check` checks this match without printing either value. Back up the env and encryption key separately in a protected secret store.
 
-Set `WEB_URL`, `UNI_MAIL_HUB_PUBLIC_URL` and `ALLOWED_ORIGINS` to the exact HTTPS application origin, with no trailing path. `API_URL=http://api:4000` is the fixed internal Compose target; production config rejects arbitrary private cleartext API targets. The session cookie is `Secure`, `HttpOnly`, `SameSite=Lax`, and host-only. Direct administrator login over raw HTTP is unsupported. CORS permits the configured HTTPS origin only; do not use a wildcard. `API_BIND_HOST=0.0.0.0` applies only inside the API container, whose port is not published.
+Set `WEB_URL`, `UNI_MAIL_HUB_PUBLIC_URL` and `ALLOWED_ORIGINS` to the exact HTTPS application origin, with no trailing path. `API_URL=http://uni-mail-hub-api:4000` is the recommended internal Compose target; production config rejects arbitrary private cleartext API targets. The session cookie is `Secure`, `HttpOnly`, `SameSite=Lax`, and host-only. Direct administrator login over raw HTTP is unsupported. CORS permits the configured HTTPS origin only; do not use a wildcard. `API_BIND_HOST=0.0.0.0` applies only inside the API container, whose port is not published.
 
 `POSTGRES_USER`, `POSTGRES_DB`, `POSTGRES_PASSWORD`, `BACKUP_HOST_DIR`, and `APP_VERSION` are read by Compose. `TLS_CERT_DIR` is required only for standalone Nginx; set `EXTERNAL_TLS_TERMINATION=false` there. Use absolute Linux paths for host directories. `BACKUP_DIR=/backups` and `BACKUP_PG_MODE=native` are required inside `ops`. The example concurrency remains SMTP 5, IMAP 3, and one worker each for cPanel, monitoring and webhook delivery. `MONITORING_INTERVAL_MINUTES=10`; one worker process owns daily retention at 03:00 UTC when `RETENTION_ENABLED=true`. A Redis lease prevents duplicate retention execution, but deploy one worker replica unless scaling has been separately tested.
 
@@ -46,6 +46,18 @@ For fresh install use `bash scripts/deploy-production.sh --fresh --traefik`; for
 docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.traefik.yml run --rm ops node scripts/production/check.mjs
 docker compose --env-file .env.production -f docker-compose.prod.yml -f docker-compose.traefik.yml run --rm ops node scripts/production/smoke.mjs
 ```
+
+### Internal DNS on a shared ingress network
+
+Docker DNS can return a different stack's container for a generic name such as `postgres` when API joins the shared `app_plane` network. A successful TCP connection to that container can then look like a database password failure. Use the network-scoped aliases below; they do not change credentials, databases, or migrations:
+
+```text
+DATABASE_URL=postgresql://unimail:<same-url-encoded-password>@uni-mail-hub-postgres:5432/unimailhub?schema=public
+REDIS_URL=redis://uni-mail-hub-redis:6379
+API_URL=http://uni-mail-hub-api:4000
+```
+
+`uni-mail-hub-postgres` and `uni-mail-hub-redis` exist only on private `back`; `uni-mail-hub-api` exists on `front`. Web and API retain their `app_plane` attachment solely for Traefik. The production preflight requires these aliases in Traefik mode. Existing standalone Nginx installs may keep `postgres`, `redis`, and `api` while transitioning, but new installations should use the unique aliases. For an existing installation, update only the three URL hostnames in `.env.production` and preserve the passwords and encryption key. During a planned maintenance window, recreate PostgreSQL and Redis so Docker assigns their new aliases, then recreate API, worker and web with both Compose files. Keep the existing named data volumes. Run preflight and smoke after restart; no schema migration is needed for the hostname change.
 
 ## Fresh install
 

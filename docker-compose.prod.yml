@@ -93,7 +93,10 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [front, back]
+    networks:
+      front:
+        aliases: [uni-mail-hub-api]
+      back:
     healthcheck:
       test: ['CMD', 'node', '-e', "fetch('http://127.0.0.1:4000/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
       interval: 30s
@@ -137,7 +140,9 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:?Set POSTGRES_DB}
     volumes:
       - postgres_data:/var/lib/postgresql/data
-    networks: [back]
+    networks:
+      back:
+        aliases: [uni-mail-hub-postgres]
     healthcheck:
       test: ['CMD-SHELL', 'pg_isready -U "$$POSTGRES_USER" -d "$$POSTGRES_DB"']
       interval: 10s
@@ -151,7 +156,9 @@ services:
     restart: unless-stopped
     volumes:
       - redis_data:/data
-    networks: [back]
+    networks:
+      back:
+        aliases: [uni-mail-hub-redis]
     healthcheck:
       test: ['CMD', 'redis-cli', 'ping']
       interval: 10s
