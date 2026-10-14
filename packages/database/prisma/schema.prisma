@@ -81,8 +81,6 @@ model User {
   createdApiKeys ApiKey[] @relation("ApiKeyCreator")
   composedMessages OutgoingMessage[] @relation("WebmailComposeCreator")
   sessions UserSession[]
-  security UserSecurity?
-  recoveryCodes RecoveryCode[]
 }
 
 model UserSession {
@@ -97,31 +95,6 @@ model UserSession {
   userAgent String?
 
   @@index([userId, revokedAt, expiresAt])
-}
-
-model UserSecurity {
-  userId String @id
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  totpSecretCiphertext String?
-  totpSecretIv String?
-  totpSecretTag String?
-  pendingTotpCiphertext String?
-  pendingTotpIv String?
-  pendingTotpTag String?
-  pendingTotpExpiresAt DateTime?
-  totpEnabledAt DateTime?
-  lastTotpStep Int?
-  updatedAt DateTime @updatedAt
-}
-
-model RecoveryCode {
-  id String @id @default(cuid())
-  userId String
-  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
-  codeHash String
-  createdAt DateTime @default(now())
-
-  @@unique([userId, codeHash])
 }
 
 model Project {

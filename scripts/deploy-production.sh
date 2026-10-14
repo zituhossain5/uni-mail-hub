@@ -50,18 +50,19 @@ if [[ "$mode" == --update ]]; then
 fi
 
 dc build api worker web
+if [[ "$mode" == --update ]]; then
+  # The retiring 2FA migration drops tables read by older API images.
+  dc stop web api worker
+fi
 dc run --rm ops node node_modules/prisma/build/index.js migrate deploy --schema packages/database/prisma/schema.prisma
 if [[ "$mode" == --fresh ]]; then
   dc run --rm ops node node_modules/tsx/dist/cli.mjs packages/database/seed.ts
   dc run --rm ops node scripts/production/check.mjs
 else
-  dc run --rm ops node scripts/production/check.mjs --require-enrolled
+  dc run --rm ops node scripts/production/check.mjs
 fi
 
 dc up -d "${services[@]}"
 for service in "${services[@]}"; do wait_healthy "$service"; done
 dc run --rm ops node scripts/production/smoke.mjs
 echo 'Deployment checks passed. Keep the previous image tag and verified backup for rollback.'
-if [[ "$mode" == --fresh ]]; then
-  echo 'Complete administrator 2FA enrollment, save recovery codes, set PRODUCTION_2FA_BOOTSTRAP=false, and recreate API/web.'
-fi

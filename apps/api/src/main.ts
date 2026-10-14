@@ -72,13 +72,8 @@ async function bootstrap() {
   await app.init();
   if (config.NODE_ENV === 'production') {
     const database = app.get(Database);
-    const [admins, unprotected, users] = await Promise.all([
-      database.user.count({ where: { role: UserRole.SUPER_ADMIN, isActive: true } }),
-      database.user.count({ where: { role: UserRole.SUPER_ADMIN, isActive: true, OR: [{ security: null }, { security: { totpEnabledAt: null } }] } }),
-      database.user.count(),
-    ]);
-    const freshBootstrap = config.PRODUCTION_2FA_BOOTSTRAP && admins === 1 && unprotected === 1 && users === 1;
-    if (!admins || (unprotected && !freshBootstrap)) throw new Error('Production requires an active SUPER_ADMIN with 2FA enabled');
+    const admins = await database.user.count({ where: { role: UserRole.SUPER_ADMIN, isActive: true } });
+    if (!admins) throw new Error('Production requires an active SUPER_ADMIN');
   }
   await app.listen(config.API_PORT, config.API_BIND_HOST);
 }

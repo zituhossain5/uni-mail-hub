@@ -74,7 +74,7 @@ async function relay(request: NextRequest, context: { params: Promise<{ path: st
       return response;
     }
     if (isLogin && upstream.ok && typeof data === 'object' && data !== null && 'token' in data && typeof data.token === 'string') {
-      const response = NextResponse.json({ user: 'user' in data ? data.user : null, requiresTwoFactorSetup: 'requiresTwoFactorSetup' in data && data.requiresTwoFactorSetup === true }, { headers: { 'Cache-Control': 'private, no-store' } });
+      const response = NextResponse.json({ user: 'user' in data ? data.user : null }, { headers: { 'Cache-Control': 'private, no-store' } });
       response.cookies.set('umh_session', data.token, { httpOnly: true, secure: process.env.NODE_ENV === 'production', sameSite: 'lax', path: '/', maxAge: 8 * 60 * 60 });
       return response;
     }

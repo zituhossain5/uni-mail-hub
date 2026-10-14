@@ -13,7 +13,6 @@ const Redis = require('ioredis');
 const root = resolve(import.meta.dirname, '../..');
 const phase = process.argv.includes('--pre-migrate') ? 'pre-migrate' : 'ready';
 const configOnly = process.argv.includes('--config-only');
-const requireEnrolled = process.argv.includes('--require-enrolled');
 const fail = code => { throw new Error(code); };
 const pass = value => console.log('OK ' + value);
 
@@ -73,24 +72,15 @@ async function main() {
     pass('PostgreSQL and Redis reachable');
     await migrationLedger(db);
     if (phase === 'ready') {
-      const [admins, unprotected, users] = await Promise.all([
-        db.user.count({ where: { role: UserRole.SUPER_ADMIN, isActive: true } }),
-        db.user.count({ where: { role: UserRole.SUPER_ADMIN, isActive: true, OR: [{ security: null }, { security: { totpEnabledAt: null } }] } }),
-        db.user.count(),
-      ]);
-      if (!admins || unprotected && !(config.PRODUCTION_2FA_BOOTSTRAP && admins === 1 && unprotected === 1 && users === 1)) fail('ADMIN_2FA_REQUIRED');
-      if (requireEnrolled && (unprotected || config.PRODUCTION_2FA_BOOTSTRAP)) fail('ADMIN_2FA_ENROLLMENT_INCOMPLETE');
-      pass(unprotected ? 'Restricted first-install 2FA enrollment ready' : 'Administrator 2FA enforced');
+      const admins = await db.user.count({ where: { role: UserRole.SUPER_ADMIN, isActive: true } });
+      if (!admins) fail('ACTIVE_ADMIN_REQUIRED');
+      pass('Active administrator present');
       const encryptionKey = decodeEncryptionKey(config.MAIL_CREDENTIAL_ENCRYPTION_KEY);
       let verified = 0;
       const verify = value => { decryptSecret(value, encryptionKey); verified++; };
       for (const row of await db.mailboxCredential.findMany({ select: { encryptedPassword: true, encryptionIv: true, encryptionAuthTag: true, encryptionVersion: true } })) verify(row);
       for (const row of await db.cpanelAccount.findMany({ select: { encryptedApiToken: true, encryptionIv: true, encryptionAuthTag: true, encryptionVersion: true } })) verify({ encryptedPassword: row.encryptedApiToken, encryptionIv: row.encryptionIv, encryptionAuthTag: row.encryptionAuthTag, encryptionVersion: row.encryptionVersion });
       for (const row of await db.webhookEndpoint.findMany({ select: { encryptedSecret: true, encryptionIv: true, encryptionAuthTag: true, encryptionVersion: true } })) verify({ encryptedPassword: row.encryptedSecret, encryptionIv: row.encryptionIv, encryptionAuthTag: row.encryptionAuthTag, encryptionVersion: row.encryptionVersion });
-      for (const row of await db.userSecurity.findMany({ where: { totpEnabledAt: { not: null } }, select: { totpSecretCiphertext: true, totpSecretIv: true, totpSecretTag: true } })) {
-        if (!row.totpSecretCiphertext || !row.totpSecretIv || !row.totpSecretTag) fail('INCOMPLETE_2FA_SECRET');
-        verify({ encryptedPassword: row.totpSecretCiphertext, encryptionIv: row.totpSecretIv, encryptionAuthTag: row.totpSecretTag, encryptionVersion: 1 });
-      }
       pass(`Encrypted records decryptable (${verified} checked)`);
       const status = spawnSync(process.execPath, ['node_modules/prisma/build/index.js', 'migrate', 'status', '--schema', 'packages/database/prisma/schema.prisma'], { cwd: root, env: process.env, stdio: 'ignore' });
       if (status.status !== 0) fail('PRISMA_MIGRATION_STATUS_FAILED');

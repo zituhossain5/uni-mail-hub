@@ -1,6 +1,6 @@
 # Disaster recovery
 
-The recovery set is a verified PostgreSQL dump, the **original** `MAIL_CREDENTIAL_ENCRYPTION_KEY` kept separately, and the deployment configuration and secrets inventory. A database backup without that key cannot recover encrypted mailbox credentials, cPanel tokens, webhook signing secrets, or TOTP secrets. Protect dumps as sensitive mail data; use encrypted storage, restricted access, and encrypted off-server copies. Never attach dumps or secrets to chat, tickets, or Git.
+The recovery set is a verified PostgreSQL dump, the **original** `MAIL_CREDENTIAL_ENCRYPTION_KEY` kept separately, and the deployment configuration and secrets inventory. A database backup without that key cannot recover encrypted mailbox credentials, cPanel tokens, or webhook signing secrets. Protect dumps as sensitive mail data; use encrypted storage, restricted access, and encrypted off-server copies. Never attach dumps or secrets to chat, tickets, or Git.
 
 ## VPS loss
 
@@ -12,9 +12,9 @@ Stop API and worker writes. Preserve a restricted forensic copy of current state
 
 ## Encryption key lost or compromised
 
-If the key is missing, retrieve the preserved original from the separate secure backup. If every copy is lost, the encrypted values in PostgreSQL cannot be decrypted; re-enter mailbox credentials and cPanel tokens, recreate webhook secrets, re-enroll TOTP through an audited recovery process, and revoke sessions. A new key cannot decrypt old ciphertext.
+If the key is missing, retrieve the preserved original from the separate secure backup. If every copy is lost, the encrypted values in PostgreSQL cannot be decrypted; re-enter mailbox credentials and cPanel tokens, recreate webhook secrets, and revoke sessions. A new key cannot decrypt old ciphertext.
 
-If the key may be compromised, restrict access, preserve evidence, rotate upstream mailbox passwords and cPanel tokens, recreate webhook secrets, review TOTP exposure, and revoke sessions. Re-encrypt stored secrets with a reviewed migration using fresh nonces before switching keys. See [secrets-runbook.md](secrets-runbook.md); there is no automatic key rotation command.
+If the key may be compromised, restrict access, preserve evidence, rotate upstream mailbox passwords and cPanel tokens, recreate webhook secrets, and revoke sessions. Re-encrypt stored secrets with a reviewed migration using fresh nonces before switching keys. See [secrets-runbook.md](secrets-runbook.md); there is no automatic key rotation command.
 
 ## Recovery verification
 

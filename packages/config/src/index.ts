@@ -11,7 +11,6 @@ const schema = z.object({
   ALLOWED_ORIGINS: z.string().optional(),
   API_PORT: z.coerce.number().int().positive().default(4000),
   API_BIND_HOST: z.enum(['127.0.0.1', '0.0.0.0']).default('127.0.0.1'),
-  PRODUCTION_2FA_BOOTSTRAP: z.enum(['true', 'false']).default('false').transform(value => value === 'true'),
   MAIL_CREDENTIAL_ENCRYPTION_KEY: z.string().refine((value) => /^[A-Za-z0-9+/]{43}=$/.test(value) && Buffer.from(value, 'base64').length === 32 && Buffer.from(value, 'base64').toString('base64') === value, 'Must be a Base64-encoded 32-byte key'),
   MAIL_API_RATE_LIMIT_MAX: z.coerce.number().int().min(1).max(10000).default(60),
   MAIL_API_RATE_LIMIT_WINDOW_SECONDS: z.coerce.number().int().min(1).max(3600).default(60),

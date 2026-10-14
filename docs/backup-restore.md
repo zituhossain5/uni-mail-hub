@@ -1,6 +1,6 @@
 # PostgreSQL backup and restore
 
-PostgreSQL is the durable data source. A dump can contain mail bodies, addresses, audit records, and encrypted credentials. Keep it on encrypted storage with access limited to backup operators; never commit, post, or serve a dump publicly. Store `MAIL_CREDENTIAL_ENCRYPTION_KEY` separately as described in [secrets-runbook.md](secrets-runbook.md). A database dump alone cannot recover encrypted mailbox credentials, cPanel tokens, webhook secrets, or TOTP secrets.
+PostgreSQL is the durable data source. A dump can contain mail bodies, addresses, audit records, and encrypted credentials. Keep it on encrypted storage with access limited to backup operators; never commit, post, or serve a dump publicly. Store `MAIL_CREDENTIAL_ENCRYPTION_KEY` separately as described in [secrets-runbook.md](secrets-runbook.md). A database dump alone cannot recover encrypted mailbox credentials, cPanel tokens, or webhook secrets.
 
 ## Configuration and tools
 

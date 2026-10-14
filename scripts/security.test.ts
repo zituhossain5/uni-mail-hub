@@ -3,17 +3,16 @@ import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createRequire } from 'node:module';
 import { resolve } from 'node:path';
-import { randomBytes } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { readConfig } from '../packages/config/src/index';
-import { decodeEncryptionKey, encryptSecret } from '../packages/security/src/index';
-import { consumeSecondFactor } from '../apps/api/dist/security-auth.js';
+import { AuthController } from '../apps/api/dist/auth.js';
+import { SecurityAuthController } from '../apps/api/dist/security-auth.js';
 import { AuthGuard } from '../apps/api/dist/core.js';
 import { safeEmailHtml } from '../apps/api/src/webmail-html';
 import { publicWebhookAddress, webhookUrl, pinnedWebhookLookupAnswer } from '../packages/mail/src/webhook';
 
 const requireApi = createRequire(resolve('apps/api/package.json'));
-const { authenticator } = requireApi('otplib') as typeof import('../apps/api/node_modules/otplib');
+const argon2 = requireApi('argon2') as typeof import('../apps/api/node_modules/argon2');
 
 test('production config rejects local origins and weak secrets without echoing their values', () => {
   const original = process.env.NODE_ENV;
@@ -47,26 +46,31 @@ test('production config permits only the fixed Compose API aliases and legacy en
   }
 });
 
-test('TOTP cannot be replayed and a recovery code can be used only once', async () => {
-  const secret = authenticator.generateSecret();
-  const encrypted = encryptSecret(secret, decodeEncryptionKey(process.env.MAIL_CREDENTIAL_ENCRYPTION_KEY!));
-  let lastStep: number | null = null;
-  let recoveryAvailable = true;
-  const db = {
-    userSecurity: { updateMany: async ({ data }: { data: { lastTotpStep: number } }) => {
-      if (lastStep !== null && lastStep >= data.lastTotpStep) return { count: 0 };
-      lastStep = data.lastTotpStep; return { count: 1 };
-    } },
-    recoveryCode: { deleteMany: async () => { if (!recoveryAvailable) return { count: 0 }; recoveryAvailable = false; return { count: 1 }; } },
+test('production login needs only the correct password and still creates a session', async () => {
+  const password = 'synthetic-admin-password';
+  const user = { id: 'user', name: 'Synthetic', email: 'synthetic@example.invalid', role: 'SUPER_ADMIN', isActive: true, passwordHash: await argon2.hash(password) };
+  const tx = {
+    userSession: { create: async () => ({ id: 'session' }) },
+    user: { update: async () => ({}) },
     auditLog: { create: async () => ({}) },
-  } as unknown as Parameters<typeof consumeSecondFactor>[0];
-  const factor = { totpSecretCiphertext: encrypted.encryptedPassword, totpSecretIv: encrypted.encryptionIv, totpSecretTag: encrypted.encryptionAuthTag, lastTotpStep: null };
-  const code = authenticator.generate(secret);
-  assert.equal(await consumeSecondFactor(db, 'synthetic-user', code, factor), true);
-  assert.equal(await consumeSecondFactor(db, 'synthetic-user', code, factor), false);
-  const recovery = randomBytes(12).toString('hex').toUpperCase();
-  assert.equal(await consumeSecondFactor(db, 'synthetic-user', recovery, factor), true);
-  assert.equal(await consumeSecondFactor(db, 'synthetic-user', recovery, factor), false);
+  };
+  const db = {
+    user: { findUnique: async (query: { include?: unknown }) => { assert.equal(query.include, undefined); return user; } },
+    auditLog: { create: async () => ({}) },
+    $transaction: async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx),
+  } as unknown as ConstructorParameters<typeof AuthController>[0];
+  const jwt = { signAsync: async () => 'synthetic-token' } as unknown as ConstructorParameters<typeof AuthController>[1];
+  const controller = new AuthController(db, jwt);
+  const request = { ip: '127.0.0.1', headers: {} } as Parameters<AuthController['login']>[1];
+  const prior = process.env.NODE_ENV;
+  process.env.NODE_ENV = 'production';
+  try {
+    const result = await controller.login({ email: user.email, password }, request);
+    assert.equal(result.token, 'synthetic-token');
+    assert.deepEqual(result.user, { id: user.id, name: user.name, email: user.email, role: user.role });
+    assert.equal('requiresTwoFactor' in result, false);
+    await assert.rejects(controller.login({ email: user.email, password: 'incorrect' }, request));
+  } finally { if (prior === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = prior; }
 });
 
 test('revoked and expired sessions cannot authorize requests', async () => {
@@ -88,29 +92,25 @@ test('revoked and expired sessions cannot authorize requests', async () => {
   await assert.rejects(guard.canActivate(context));
 });
 
-test('fresh production admin is limited to 2FA enrollment until enabled', async () => {
-  const priorEnv = process.env.NODE_ENV;
-  const priorBootstrap = process.env.PRODUCTION_2FA_BOOTSTRAP;
-  process.env.NODE_ENV = 'production';
-  process.env.PRODUCTION_2FA_BOOTSTRAP = 'true';
-  try {
-    const db = {
-      userSession: { findUnique: async () => ({ userId: 'user', revokedAt: null, expiresAt: new Date(Date.now() + 60_000), lastUsedAt: new Date() }) },
-      user: { findUnique: async () => ({ id: 'user', role: 'SUPER_ADMIN', email: 'synthetic@example.invalid', name: 'Synthetic', isActive: true }) },
-      userSecurity: { findUnique: async () => ({ totpEnabledAt: null }) },
-    } as unknown as ConstructorParameters<typeof AuthGuard>[2];
-    const jwt = { verifyAsync: async () => ({ sub: 'user', sid: 'session' }) } as unknown as ConstructorParameters<typeof AuthGuard>[1];
-    const reflector = { getAllAndOverride: () => false } as unknown as ConstructorParameters<typeof AuthGuard>[0];
-    const guard = new AuthGuard(reflector, jwt, db);
-    const request = { headers: { authorization: 'Bearer synthetic' }, path: '/api/v1/dashboard' } as Record<string, unknown>;
-    const context = { getHandler: () => null, getClass: () => null, switchToHttp: () => ({ getRequest: () => request }) } as unknown as Parameters<AuthGuard['canActivate']>[0];
-    await assert.rejects(guard.canActivate(context), (error: unknown) => error instanceof Error && error.message.includes('Complete two-factor setup'));
-    request.path = '/api/v1/auth/2fa/setup';
-    assert.equal(await guard.canActivate(context), true);
-  } finally {
-    if (priorEnv === undefined) delete process.env.NODE_ENV; else process.env.NODE_ENV = priorEnv;
-    if (priorBootstrap === undefined) delete process.env.PRODUCTION_2FA_BOOTSTRAP; else process.env.PRODUCTION_2FA_BOOTSTRAP = priorBootstrap;
-  }
+test('administrator password change verifies the current password and revokes other sessions', async () => {
+  const currentPassword = 'synthetic-current-password';
+  const user = { id: 'user', passwordHash: await argon2.hash(currentPassword) };
+  let revoked = false;
+  const tx = {
+    user: { updateMany: async () => ({ count: 1 }) },
+    userSession: { updateMany: async () => { revoked = true; return { count: 1 }; } },
+    auditLog: { create: async () => ({}) },
+  };
+  const db = {
+    user: { findUniqueOrThrow: async () => user },
+    $transaction: async (callback: (client: typeof tx) => Promise<unknown>) => callback(tx),
+  } as unknown as ConstructorParameters<typeof SecurityAuthController>[0];
+  const controller = new SecurityAuthController(db);
+  const request = { user: { id: 'user', role: 'SUPER_ADMIN', sessionId: 'current' }, ip: '127.0.0.1' } as Parameters<SecurityAuthController['changePassword']>[0];
+  await assert.rejects(controller.changePassword(request, { currentPassword: 'incorrect', newPassword: 'synthetic-new-password' }));
+  assert.equal(revoked, false);
+  assert.deepEqual(await controller.changePassword(request, { currentPassword, newPassword: 'synthetic-new-password' }), { success: true });
+  assert.equal(revoked, true);
 });
 
 test('HTML and outbound webhook targets retain XSS and SSRF protections', () => {
