@@ -1,6 +1,5 @@
 import { Body, Controller, Get, Header, HttpException, Inject, Param, Post, Req, UnauthorizedException } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { UserRole } from '@uni/database';
 import argon2 from 'argon2';
 import { z } from 'zod';
 import { AuthedRequest, Database, parse } from './core';
@@ -26,7 +25,6 @@ export class SecurityAuthController {
   @Post('password/change')
   @Throttle({ default: { limit: 3, ttl: 60_000, blockDuration: 60_000 } })
   async changePassword(@Req() request: AuthedRequest, @Body() body: unknown) {
-    if (request.user.role !== UserRole.SUPER_ADMIN) throw new HttpException({ code: 'FORBIDDEN', message: 'Administrator account required' }, 403);
     const { currentPassword, newPassword } = parse(changePasswordSchema, body);
     if (currentPassword === newPassword) throw new HttpException({ code: 'PASSWORD_REUSE', message: 'Choose a different password' }, 400);
     const user = await this.db.user.findUniqueOrThrow({ where: { id: request.user.id } });
@@ -36,7 +34,7 @@ export class SecurityAuthController {
       const updated = await tx.user.updateMany({ where: { id: user.id, passwordHash: user.passwordHash }, data: { passwordHash } });
       if (updated.count !== 1) throw new UnauthorizedException('Invalid credentials');
       await tx.userSession.updateMany({ where: { userId: user.id, id: { not: request.user.sessionId }, revokedAt: null }, data: { revokedAt: new Date() } });
-      await tx.auditLog.create({ data: { userId: user.id, action: 'ADMIN_PASSWORD_CHANGED', entityType: 'User', entityId: user.id, ipAddress: request.ip } });
+      await tx.auditLog.create({ data: { userId: user.id, action: 'USER_PASSWORD_CHANGED', entityType: 'User', entityId: user.id, ipAddress: request.ip } });
     });
     return { success: true };
   }

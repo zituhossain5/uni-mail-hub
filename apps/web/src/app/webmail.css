@@ -81,3 +81,11 @@
 .webmail-attachment{display:inline-flex;vertical-align:top;width:min(100%,340px);min-height:66px;margin:0 8px 8px 0;padding:11px 12px;background:#fff;border-color:#e2e8f0}.webmail-attachment:hover{border-color:#bfdbfe;background:#f8fbff}.webmail-attachment strong{font-size:12px}.webmail-attachment small{font-size:10px}.webmail-attachment>a{font-size:11px}.webmail-attachment-kind{display:grid!important;place-items:center;flex:0 0 38px;min-width:38px;height:38px;border-radius:7px;background:#eef2ff;color:#4338ca;font-size:10px;font-weight:800}
 @media(max-width:680px){.webmail-thread-heading{padding:22px 17px 18px}.webmail-message-stack{padding:0 17px 15px}.webmail-message-toggle{padding:15px 0;gap:9px}.webmail-message-content{padding-left:0}.webmail-recipient-summary{margin:0 0 4px 47px}.webmail-headers{margin-left:47px}.webmail-thread-reply{padding:0 17px}.webmail-auto-read-error{padding:0 17px}.webmail-plain{font-size:14px}.webmail-html{height:min(520px,65vh)}}
 @media(max-width:420px){.webmail-message-toggle .webmail-avatar{width:34px;height:34px;flex-basis:34px}.webmail-message-toggle time{max-width:76px;font-size:10px}.webmail-recipient-summary,.webmail-headers{margin-left:43px}.webmail-thread-heading h2{font-size:20px}.webmail-response-actions .secondary-button{padding:7px 9px}.webmail-attachment{width:100%;margin-right:0}}
+.webmail.role-viewer .webmail-actions .primary-button,
+.webmail.role-viewer .webmail-thread-reply,
+.webmail.role-staff .webmail-actions .secondary-button,
+.webmail.role-viewer .webmail-actions .secondary-button { display: none; }
+.detail-page.role-admin .credential-actions,
+.detail-page.role-admin .health-actions,
+.detail-page.role-manager .credential-actions,
+.detail-page.role-manager .health-actions { display: none; }

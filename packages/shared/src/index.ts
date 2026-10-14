@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const userRoles = ['SUPER_ADMIN', 'ADMIN', 'MEMBER'] as const;
+export const userRoles = ['SUPER_ADMIN', 'ADMIN', 'MANAGER', 'STAFF', 'VIEWER'] as const;
 export const projectStatuses = ['ACTIVE', 'INACTIVE'] as const;
 export const domainStatuses = ['UNVERIFIED', 'ACTIVE', 'ISSUE', 'DISABLED'] as const;
 export const mailboxStatuses = ['UNKNOWN', 'HEALTHY', 'WARNING', 'ERROR', 'DISABLED'] as const;

@@ -11,7 +11,9 @@ datasource db {
 enum UserRole {
   SUPER_ADMIN
   ADMIN
-  MEMBER
+  MANAGER
+  STAFF
+  VIEWER
 }
 
 enum ProjectStatus {
@@ -72,7 +74,7 @@ model User {
   name         String
   email        String    @unique
   passwordHash String
-  role         UserRole  @default(MEMBER)
+  role         UserRole  @default(VIEWER)
   isActive     Boolean   @default(true)
   createdAt    DateTime  @default(now())
   updatedAt    DateTime  @updatedAt
@@ -81,6 +83,50 @@ model User {
   createdApiKeys ApiKey[] @relation("ApiKeyCreator")
   composedMessages OutgoingMessage[] @relation("WebmailComposeCreator")
   sessions UserSession[]
+  projectMemberships ProjectMember[]
+  mailboxGrants UserMailboxAccess[]
+  invitations UserInvitation[]
+}
+
+model ProjectMember {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  projectId String
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  createdByUserId String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([userId, projectId])
+  @@index([projectId, userId])
+}
+
+model UserMailboxAccess {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mailboxId String
+  mailbox Mailbox @relation(fields: [mailboxId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+
+  @@unique([userId, mailboxId])
+  @@index([mailboxId, userId])
+}
+
+model UserInvitation {
+  id String @id @default(cuid())
+  userId String
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String @unique
+  expiresAt DateTime
+  acceptedAt DateTime?
+  revokedAt DateTime?
+  createdByUserId String
+  createdAt DateTime @default(now())
+
+  @@index([userId, acceptedAt, revokedAt])
+  @@index([expiresAt])
 }
 
 model UserSession {
@@ -113,6 +159,7 @@ model Project {
   webhookEvents WebhookEvent[]
   suppressions Suppression[]
   bounces MailBounce[]
+  members ProjectMember[]
 }
 
 model Domain {
@@ -175,6 +222,7 @@ model Mailbox {
   syncedMessages MailMessage[]
   syncRuns MailSyncRun[]
   cpanelDiscoveries CpanelDiscoveredMailbox[]
+  userGrants UserMailboxAccess[]
 
   @@index([projectId])
   @@index([domainId])

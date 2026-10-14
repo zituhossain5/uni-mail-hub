@@ -4,6 +4,7 @@ import { generateApiKey } from '@uni/security';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { RequirePermission } from './access';
 
 const idSchema = z.string().cuid();
 const grantsSchema = z.object({ mailboxIds: z.array(idSchema).min(1).max(100) }).strict();
@@ -11,6 +12,7 @@ const safeInclude = { project: { select: { id: true, name: true } }, createdBy: 
 const safeSelect = { id: true, projectId: true, name: true, keyPrefix: true, scopes: true, isActive: true, lastUsedAt: true, expiresAt: true, createdByUserId: true, createdAt: true, updatedAt: true, revokedAt: true, ...safeInclude } as const;
 
 @SuperAdmin()
+@RequirePermission('projects.manage')
 @Controller('api-keys')
 export class ApiKeysController {
   constructor(@Inject(Database) private readonly db: Database) {}

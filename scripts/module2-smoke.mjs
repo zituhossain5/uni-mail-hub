@@ -16,7 +16,7 @@ const suffix = Date.now().toString(36);
 const secret = randomBytes(24).toString('hex');
 try {
   assert.equal((await json('mail-servers')).status, 401);
-  const member = await db.user.create({ data: { name: 'Smoke member', email: `member-${suffix}@example.com`, passwordHash: 'not-used', role: 'MEMBER' } });
+  const member = await db.user.create({ data: { name: 'Smoke member', email: `member-${suffix}@example.com`, passwordHash: 'not-used', role: 'VIEWER' } });
   memberId = member.id;
   const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
   const payload = Buffer.from(JSON.stringify({ sub: member.id, exp: Math.floor(Date.now() / 1000) + 300 })).toString('base64url');

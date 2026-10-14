@@ -3,6 +3,7 @@ import { mailServerFields, mailServerSchema } from '@uni/shared';
 import { z } from 'zod';
 import { Prisma } from '@uni/database';
 import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { RequirePermission } from './access';
 
 const idSchema = z.string().cuid();
 const patchSchema = mailServerFields.partial().refine(value => Object.keys(value).length > 0);
@@ -13,6 +14,7 @@ const include = { _count: { select: { mailboxes: true } }, mailboxes: { select: 
 export class MailServersController {
   constructor(@Inject(Database) private readonly db: Database) {}
   @Get() list() { return this.db.mailServer.findMany({ orderBy: { createdAt: 'desc' }, include }); }
+  @Get('options') @RequirePermission('mailbox.manage') options() { return this.db.mailServer.findMany({ orderBy: { name: 'asc' }, select: { id: true, name: true, status: true } }); }
   @Get(':id') async get(@Param('id') rawId: string) {
     const item = await this.db.mailServer.findUnique({ where: { id: parse(idSchema, rawId) }, include: { ...include, mailboxes: { select: { id: true, email: true, status: true }, orderBy: { email: 'asc' } } } });
     if (!item) throw new HttpException({ code: 'MAIL_SERVER_NOT_FOUND', message: 'Mail server not found' }, 404);

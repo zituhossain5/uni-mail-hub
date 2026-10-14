@@ -1,8 +1,10 @@
-import { Controller, Get, HttpException, Inject, Query } from '@nestjs/common';
+import { Controller, Get, HttpException, Inject, Query, Req } from '@nestjs/common';
 import { createHash } from 'node:crypto';
 import { Prisma } from '@uni/database';
 import { z } from 'zod';
-import { Database, SuperAdmin, parse } from './core';
+import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { RequirePermission, mailboxWhere, projectWhere } from './access';
+import { UserRole } from '@uni/database';
 import { safePreview } from './webmail-html';
 
 const id = z.string().cuid();
@@ -51,11 +53,12 @@ function token(at: Date, rowId: string, scope: string): string {
 }
 
 @SuperAdmin()
+@RequirePermission('mail.read')
 @Controller('mail/search')
 export class MailSearchController {
   constructor(@Inject(Database) private readonly db: Database) {}
 
-  @Get() async search(@Query() raw: unknown) {
+  @Get() async search(@Query() raw: unknown, @Req() request: AuthedRequest) {
     const query = parse(paramsSchema, raw);
     const limit = query.limit ?? 50;
     const mailboxIds = query.mailboxIds ? [...new Set(query.mailboxIds.split(',').filter(Boolean))] : [];
@@ -69,15 +72,15 @@ export class MailSearchController {
     if (query.after && query.before && query.after > query.before) {
       throw new HttpException({ code: 'VALIDATION_ERROR', message: 'Date range is reversed' }, 400);
     }
-    // This controller has the same SUPER_ADMIN boundary as existing webmail endpoints.
-    // Requested IDs are checked before querying mail, so unknown IDs reveal no mailbox data.
     if (mailboxIds.length) {
-      const count = await this.db.mailbox.count({ where: { id: { in: mailboxIds } } });
+      const count = await this.db.mailbox.count({ where: { id: { in: mailboxIds }, ...mailboxWhere(request.user) } });
       if (count !== mailboxIds.length) throw new HttpException({ code: 'MAILBOX_NOT_FOUND', message: 'Mailbox selection unavailable' }, 404);
     }
+    if (query.projectId && !await this.db.project.count({ where: { id: query.projectId, ...projectWhere(request.user) } })) throw new HttpException({ code: 'PROJECT_NOT_FOUND', message: 'Project selection unavailable' }, 404);
+    if (projectIds.length && await this.db.project.count({ where: { id: { in: projectIds }, ...projectWhere(request.user) } }) !== projectIds.length) throw new HttpException({ code: 'PROJECT_NOT_FOUND', message: 'Project selection unavailable' }, 404);
     if (query.folderId) {
       const folder = await this.db.mailFolder.findFirst({ where: {
-        id: query.folderId, ...(mailboxIds.length ? { mailboxId: { in: mailboxIds } } : {}),
+        id: query.folderId, mailbox: mailboxWhere(request.user), ...(mailboxIds.length ? { mailboxId: { in: mailboxIds } } : {}),
       }, select: { id: true } });
       if (!folder) throw new HttpException({ code: 'FOLDER_NOT_FOUND', message: 'Folder selection unavailable' }, 404);
     }
@@ -87,6 +90,10 @@ export class MailSearchController {
     const pattern = q ? `%${q.replace(/[\\%_]/g, '\\$&')}%` : null;
     const searchText = Prisma.sql`COALESCE(m.subject, '') || ' ' || COALESCE(m."fromName", '') || ' ' || COALESCE(m."fromEmail", '') || ' ' || COALESCE(m."textBody", '') || ' ' || COALESCE(m."messageIdHeader", '')`;
     const filters: Prisma.Sql[] = [Prisma.sql`TRUE`];
+    if (request.user.role !== UserRole.SUPER_ADMIN && request.user.role !== UserRole.ADMIN) {
+      filters.push(Prisma.sql`EXISTS (SELECT 1 FROM "ProjectMember" pm WHERE pm."projectId" = b."projectId" AND pm."userId" = ${request.user.id})`);
+      if (request.user.role !== UserRole.MANAGER) filters.push(Prisma.sql`EXISTS (SELECT 1 FROM "UserMailboxAccess" ma WHERE ma."mailboxId" = m."mailboxId" AND ma."userId" = ${request.user.id})`);
+    }
     if (mailboxIds.length) filters.push(Prisma.sql`m."mailboxId" IN (${Prisma.join(mailboxIds)})`);
     if (query.projectId) filters.push(Prisma.sql`b."projectId" = ${query.projectId}`);
     if (projectIds.length) filters.push(Prisma.sql`b."projectId" IN (${Prisma.join(projectIds)})`);

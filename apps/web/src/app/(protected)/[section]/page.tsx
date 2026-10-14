@@ -9,12 +9,23 @@ import { MailExplorer } from '@/components/mail-explorer';
 import { CpanelAccounts } from '@/components/cpanel-accounts';
 import { Monitoring } from '@/components/monitoring';
 import { SecuritySettings } from '@/components/security-settings';
+import { Users } from '@/components/users';
+import { apiGet } from '@/lib/api';
 import { Suspense } from 'react';
 
 export default async function SectionPage({ params, searchParams }: { params: Promise<{ section: string }>; searchParams: Promise<{ mailbox?: string }> }) {
   const { section } = await params;
   const { mailbox } = await searchParams;
-  if (section === 'projects' || section === 'domains' || section === 'mailboxes') return <Registry kind={section}/>;
+  if (section === 'users') {
+    const user = await apiGet<{ role: string }>('auth/me');
+    if (!user || !['SUPER_ADMIN','ADMIN'].includes(user.role)) notFound();
+    return <Users/>;
+  }
+  if (section === 'projects' || section === 'domains' || section === 'mailboxes') {
+    const user = await apiGet<{ role: string }>('auth/me');
+    if (!user || !['SUPER_ADMIN','ADMIN','MANAGER'].includes(user.role)) notFound();
+    return <Registry kind={section} role={user.role}/>;
+  }
   if (section === 'mail-servers') return <MailServers/>;
   if (section === 'cpanel-accounts') return <CpanelAccounts/>;
   if (section === 'monitoring') return <Monitoring/>;

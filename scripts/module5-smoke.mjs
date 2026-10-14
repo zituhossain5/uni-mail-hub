@@ -49,7 +49,7 @@ try {
   assert.equal((await call('webmail/mailboxes', { authenticated: false })).status, 401);
   assert.equal((await call(`mailboxes/${ids.mailbox}/folders/${inbox.id}/threads`, { authenticated: false })).status, 401);
   const memberPassword = randomUUID();
-  const member = await db.user.create({ data: { name: 'Module 5 member', email: `member-${suffix}@example.test`, passwordHash: await argon2.hash(memberPassword), role: 'MEMBER' } }); ids.member = member.id;
+  const member = await db.user.create({ data: { name: 'Module 5 member', email: `member-${suffix}@example.test`, passwordHash: await argon2.hash(memberPassword), role: 'VIEWER' } }); ids.member = member.id;
   const memberLogin = await fetch(`${web}/api/v1/auth/login`, { method: 'POST', headers: { Origin: web, 'Content-Type': 'application/json' }, body: JSON.stringify({ email: member.email, password: memberPassword }) });
   assert.equal(memberLogin.status, 200);
   const memberCookie = memberLogin.headers.get('set-cookie')?.split(';')[0]; assert(memberCookie);

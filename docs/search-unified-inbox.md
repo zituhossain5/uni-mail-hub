@@ -1,6 +1,6 @@
 # Search and Unified Inbox (Module 7)
 
-`GET /api/v1/mail/search` searches synchronized PostgreSQL mail. It requires the same signed-in `SUPER_ADMIN` role as the existing webmail endpoints. The current application does not define per-user mailbox grants for `ADMIN` or `MEMBER`; those roles cannot use webmail or this endpoint. Mailbox IDs are validated before any message query. Project and mailbox filters narrow the result set, and a selected mailbox never merges its identity with another mailbox.
+`GET /api/v1/mail/search` searches synchronized PostgreSQL mail. Super Admin and Admin can search all mailboxes; Manager is limited to assigned projects; Staff and Viewer are limited to explicitly granted mailboxes inside assigned projects. The scope is applied in SQL before pagination. Requested mailbox, project, and folder IDs are checked against the same scope before any message query. A selected mailbox never merges its identity with another mailbox.
 
 ## API
 

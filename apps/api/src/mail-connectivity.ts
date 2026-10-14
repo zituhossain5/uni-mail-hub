@@ -5,6 +5,7 @@ import { decodeEncryptionKey, decryptSecret, encryptSecret } from '@uni/security
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { RequirePermission } from './access';
 
 const idSchema = z.string().cuid();
 const activeTests = new Set<string>();
@@ -47,7 +48,7 @@ export class MailConnectivityController {
     });
     return { mailboxId: mailbox.id, configured: false };
   }
-  @Get('connection-checks') async history(@Param('id') id: string) {
+  @Get('connection-checks') @RequirePermission('mailbox.manage') async history(@Param('id') id: string) {
     const mailbox = await this.mailbox(id);
     return this.db.mailboxConnectionCheck.findMany({ where: { mailboxId: mailbox.id }, orderBy: { testedAt: 'desc' }, take: 50 });
   }

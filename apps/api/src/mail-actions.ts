@@ -7,6 +7,7 @@ import type { Response } from 'express';
 import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
 import { AuthedRequest, Database, RedisConnection, SuperAdmin, parse } from './core';
+import { RequirePermission } from './access';
 import { ImapSyncQueue } from './imap-sync';
 import { normalizedCid } from './webmail-html';
 
@@ -49,6 +50,7 @@ function partMatches(node: { part?: string; type?: string; id?: string; childNod
 }
 
 @SuperAdmin()
+@RequirePermission('mail.write')
 @Controller('mailboxes/:mailboxId/messages/:messageId')
 export class MailActionsController {
   constructor(@Inject(Database) private readonly db: Database, @Inject(RedisConnection) private readonly redis: RedisConnection, @Inject(ImapSyncQueue) private readonly queue: ImapSyncQueue) {}
@@ -175,7 +177,7 @@ export class MailActionsController {
     return this.moveMessage(box, id, chooseTarget('restore', folders, message.folder), 'MAIL_RESTORED', request);
   }
 
-  @Get('attachments/:attachmentId') async attachment(@Param('mailboxId') box: string, @Param('messageId') id: string, @Param('attachmentId') rawAttachmentId: string, @Query() rawQuery: unknown, @Req() request: AuthedRequest, @Res() response: Response) {
+  @Get('attachments/:attachmentId') @RequirePermission('mail.read') async attachment(@Param('mailboxId') box: string, @Param('messageId') id: string, @Param('attachmentId') rawAttachmentId: string, @Query() rawQuery: unknown, @Req() request: AuthedRequest, @Res() response: Response) {
     const message = await this.stored(box, id);
     const attachmentId = parse(idSchema, rawAttachmentId);
     const inline = !!parse(downloadSchema, rawQuery).inline;

@@ -1,8 +1,9 @@
-import { Controller, Get, HttpException, Inject, Param, Query } from '@nestjs/common';
+import { Controller, Get, HttpException, Inject, Param, Query, Req } from '@nestjs/common';
 import { Prisma } from '@uni/database';
 import { readConfig } from '@uni/config';
 import { z } from 'zod';
-import { Database, SuperAdmin, parse } from './core';
+import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { RequirePermission, mailboxWhere } from './access';
 import { normalizedCid, safeEmailHtml, safePreview } from './webmail-html';
 
 const attachmentLimit = BigInt(readConfig().MAIL_ATTACHMENT_MAX_BYTES);
@@ -31,11 +32,12 @@ type ThreadRow = {
 };
 
 @SuperAdmin()
+@RequirePermission('mail.read')
 @Controller('webmail')
 export class WebmailContextController {
   constructor(@Inject(Database) private readonly db: Database) {}
-  @Get('mailboxes') async mailboxes() {
-    return this.db.mailbox.findMany({ orderBy: [{ project: { name: 'asc' } }, { email: 'asc' }], select: {
+  @Get('mailboxes') async mailboxes(@Req() request: AuthedRequest) {
+    return this.db.mailbox.findMany({ where: mailboxWhere(request.user), orderBy: [{ project: { name: 'asc' } }, { email: 'asc' }], select: {
       id: true, email: true, displayName: true, projectId: true, project: { select: { name: true } },
       status: true, isActive: true, credential: { select: { id: true } },
       mailServer: { select: { status: true, imapHost: true, imapPort: true } },
@@ -45,6 +47,7 @@ export class WebmailContextController {
 }
 
 @SuperAdmin()
+@RequirePermission('mail.read')
 @Controller('mailboxes/:id')
 export class WebmailMessagesController {
   constructor(@Inject(Database) private readonly db: Database) {}

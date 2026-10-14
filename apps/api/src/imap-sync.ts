@@ -3,6 +3,7 @@ import { Queue } from 'bullmq';
 import Redis from 'ioredis';
 import { z } from 'zod';
 import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { RequirePermission } from './access';
 
 const idSchema = z.string().cuid();
 
@@ -18,6 +19,7 @@ export class ImapSyncQueue implements OnModuleDestroy {
 }
 
 @SuperAdmin()
+@RequirePermission('mail.read')
 @Controller('mailboxes/:id')
 export class ImapSyncController {
   constructor(@Inject(Database) private readonly db: Database, @Inject(ImapSyncQueue) private readonly queue: ImapSyncQueue) {}
@@ -26,7 +28,7 @@ export class ImapSyncController {
     if (!mailbox) throw new HttpException({ code: 'MAILBOX_NOT_FOUND', message: 'Mailbox not found' }, 404);
     return mailbox;
   }
-  @Post('sync') async sync(@Param('id') rawId: string, @Req() request: AuthedRequest) {
+  @Post('sync') @RequirePermission('mail.sync') async sync(@Param('id') rawId: string, @Req() request: AuthedRequest) {
     const mailbox = await this.mailbox(rawId);
     if (!mailbox.isActive || mailbox.status === 'DISABLED') throw new HttpException({ code: 'MAILBOX_DISABLED', message: 'Enable this mailbox before synchronizing.' }, 409);
     if (!mailbox.credential) throw new HttpException({ code: 'MAIL_CREDENTIAL_NOT_CONFIGURED', message: 'Configure mailbox credentials before synchronizing.' }, 409);

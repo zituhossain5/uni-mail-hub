@@ -4,6 +4,7 @@ import Link from 'next/link';
 import { Activity, KeyRound, Mail, RefreshCw } from 'lucide-react';
 import { ConfirmDialog, Dialog } from './dialog';
 import { DateTime, DetailField, EmptyState, PageHeader, SectionCard, StatusBadge } from './ui';
+import { useWorkspaceRole } from './access-context';
 
 type Check = { id: string; protocol: 'IMAP' | 'SMTP'; status: 'SUCCESS' | 'FAILED'; latencyMs: number; errorCode: string | null; errorMessage: string | null; testedAt: string; configVersion: number };
 type Mailbox = { id: string; email: string; displayName: string | null; status: string; connectionConfigVersion: number; project: { name: string }; domain: { domain: string }; mailServer: { name: string; providerType: string; imapHost: string | null; imapPort: number | null; imapSecurity: string; smtpHost: string | null; smtpPort: number | null; smtpSecurity: string; smtpAuthMode: string } | null; credential: { username: string; updatedAt: string; lastRotatedAt: string } | null };
@@ -17,6 +18,7 @@ function ProtocolHealth({ protocol, check, authDisabled }: { protocol: 'IMAP' | 
 }
 
 export function MailboxDetail({ id }: { id: string }) {
+  const role = useWorkspaceRole();
   const [mailbox, setMailbox] = useState<Mailbox | null>(null);
   const [checks, setChecks] = useState<Check[]>([]);
   const [error, setError] = useState(''); const [notice, setNotice] = useState(''); const [busy, setBusy] = useState('');
@@ -34,7 +36,7 @@ export function MailboxDetail({ id }: { id: string }) {
   async function test(which: 'imap' | 'smtp' | 'connection') { setBusy(which); setNotice(''); setError(''); try { const result = await api<Record<string, { status: string; message: string }>>(`mailboxes/${id}/test-${which}`, { method: 'POST' }); setNotice(Object.entries(result).map(([protocol, value]) => `${protocol.toUpperCase()}: ${value.message}`).join(' ')); await load(); } catch (e) { setError(e instanceof Error ? e.message : 'Test failed'); } finally { setBusy(''); } }
   if (!mailbox) return error ? <div className="error-panel" role="alert"><strong>Unable to load mailbox</strong><p>{error}</p><button className="secondary-button" onClick={() => void load()}>Try again</button></div> : <div className="loading-state" role="status">Loading mailbox…</div>;
   const latest = (protocol: 'IMAP' | 'SMTP') => checks.find(check => check.protocol === protocol && check.configVersion === mailbox.connectionConfigVersion);
-  return <div className="detail-page">
+  return <div className={`detail-page role-${role.toLowerCase()}`}>
     <PageHeader eyebrow={<><Link href="/mailboxes">MAILBOXES</Link> / CONNECTIONS</>} title={mailbox.email} description={`${mailbox.displayName || 'Mailbox'} · ${mailbox.project.name}`} status={<StatusBadge status={mailbox.status}/>} actions={<Link href="/mailboxes" className="secondary-button">Back to mailboxes</Link>}/>
     {error && <p className="form-error" role="alert">{error}</p>}{notice && <p className="notice-success" role="status">{notice}</p>}
     <div className="detail-grid"><SectionCard title="Overview" description="Mailbox identity and assigned transport"><dl className="detail-list"><DetailField label="Project">{mailbox.project.name}</DetailField><DetailField label="Domain">{mailbox.domain.domain}</DetailField><DetailField label="Mail server">{mailbox.mailServer?.name ?? 'Not assigned'}</DetailField><DetailField label="Provider">{mailbox.mailServer?.providerType ?? '—'}</DetailField><DetailField label="IMAP">{mailbox.mailServer?.imapHost ? `${mailbox.mailServer.imapHost}:${mailbox.mailServer.imapPort} · ${mailbox.mailServer.imapSecurity}` : 'Not configured'}</DetailField><DetailField label="SMTP">{mailbox.mailServer?.smtpHost ? `${mailbox.mailServer.smtpHost}:${mailbox.mailServer.smtpPort} · ${mailbox.mailServer.smtpSecurity}` : 'Not configured'}</DetailField></dl></SectionCard>

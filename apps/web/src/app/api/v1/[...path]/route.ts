@@ -33,8 +33,9 @@ async function relay(request: NextRequest, context: { params: Promise<{ path: st
   const token = cookieStore.get('umh_session')?.value;
   const isLogin = path.join('/') === 'auth/login';
   const isLogout = path.join('/') === 'auth/logout';
+  const isInvitation = path[0] === 'invitations' && path.length === 2 && (path[1] === 'inspect' || path[1] === 'accept') && request.method === 'POST';
   if (isLogout && !token) return NextResponse.json({ success: true });
-  if (!isLogin && !token) return NextResponse.json({ statusCode: 401, code: 'UNAUTHORIZED', message: 'Sign in required' }, { status: 401 });
+  if (!isLogin && !isInvitation && !token) return NextResponse.json({ statusCode: 401, code: 'UNAUTHORIZED', message: 'Sign in required' }, { status: 401 });
   try {
     const maxBodyBytes = 2 * 1024 * 1024;
     const oversized = () => NextResponse.json({ statusCode: 413, code: 'PAYLOAD_TOO_LARGE', message: 'Request too large' }, { status: 413 });
@@ -55,7 +56,7 @@ async function relay(request: NextRequest, context: { params: Promise<{ path: st
     }
     const upstream = await fetch(`${api}/api/v1/${path.map(encodeURIComponent).join('/')}${request.nextUrl.search}`, {
       method: request.method,
-      headers: { 'Content-Type': 'application/json', ...(token && !isLogin ? { Authorization: `Bearer ${token}` } : {}), ...(request.headers.get('idempotency-key') ? { 'Idempotency-Key': request.headers.get('idempotency-key')! } : {}), ...(process.env.NODE_ENV === 'production' && request.headers.get('x-forwarded-for') ? { 'X-Forwarded-For': request.headers.get('x-forwarded-for')! } : {}) },
+      headers: { 'Content-Type': 'application/json', ...(token && !isLogin && !isInvitation ? { Authorization: `Bearer ${token}` } : {}), ...(request.headers.get('idempotency-key') ? { 'Idempotency-Key': request.headers.get('idempotency-key')! } : {}), ...(process.env.NODE_ENV === 'production' && request.headers.get('x-forwarded-for') ? { 'X-Forwarded-For': request.headers.get('x-forwarded-for')! } : {}) },
       body,
       cache: 'no-store',
     });

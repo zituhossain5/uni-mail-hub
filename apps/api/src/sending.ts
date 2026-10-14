@@ -11,6 +11,7 @@ import { sendMessageSchema } from '@uni/shared';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import { AuthedRequest, Database, Public, RedisConnection, SuperAdmin, parse } from './core';
+import { AccessPolicy, RequirePermission, mailboxWhere } from './access';
 import { safeForwardText } from './webmail-html';
 
 const config = readConfig();
@@ -119,6 +120,7 @@ export class ClientMessagesController {
 }
 
 @SuperAdmin()
+@RequirePermission('mail.write')
 @Controller('admin/compose')
 export class AdminComposeController {
   constructor(@Inject(Database) private readonly db: Database, @Inject(MailQueue) private readonly queue: MailQueue) {}
@@ -128,8 +130,9 @@ export class AdminComposeController {
     return this.submitPrepared(parse(sendMessageSchema, body), idempotencyKey, request);
   }
 
-  @Get('respond/:sourceMessageId') async responseDraft(@Param('sourceMessageId') rawId: string, @Query('fromMailboxId') rawMailboxId: string, @Query('kind') rawKind: string) {
+  @Get('respond/:sourceMessageId') async responseDraft(@Param('sourceMessageId') rawId: string, @Query('fromMailboxId') rawMailboxId: string, @Query('kind') rawKind: string, @Req() request: AuthedRequest) {
     const mailboxId = parse(idSchema, rawMailboxId);
+    await new AccessPolicy(this.db).mailbox(request.user, mailboxId, 'mail.write');
     const kind = parse(responseKind, rawKind);
     const source = await this.db.mailMessage.findFirst({ where: { id: parse(idSchema, rawId), mailboxId }, include: { recipients: true, attachments: { select: { id: true } } } });
     const mailbox = await this.db.mailbox.findUnique({ where: { id: mailboxId }, select: { email: true } });
@@ -143,6 +146,7 @@ export class AdminComposeController {
   @Post('respond') @HttpCode(202)
   async respond(@Body() body: unknown, @Headers('idempotency-key') idempotencyKey: string | undefined, @Req() request: AuthedRequest) {
     const input = parse(responseInput, body);
+    await new AccessPolicy(this.db).mailbox(request.user, input.fromMailboxId, 'mail.write');
     const source = await this.db.mailMessage.findFirst({ where: { id: input.sourceMessageId, mailboxId: input.fromMailboxId }, include: { recipients: true } });
     const mailbox = await this.db.mailbox.findUnique({ where: { id: input.fromMailboxId }, select: { email: true } });
     if (!source || !mailbox) throw problem('MESSAGE_NOT_FOUND', 'Source message not found in the selected mailbox', 404);
@@ -157,6 +161,7 @@ export class AdminComposeController {
   }
 
   private async submitPrepared(input: SendInput, idempotencyKey: string | undefined, request: AuthedRequest, headers: { inReplyTo: string | null; references: string[] } | null = null, auditAction = 'WEBMAIL_COMPOSE_QUEUED') {
+    await new AccessPolicy(this.db).mailbox(request.user, input.fromMailboxId, 'mail.write');
     if (!idempotencyKey || !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) throw problem('IDEMPOTENCY_KEY_REQUIRED', 'A valid Idempotency-Key header is required');
     const to = input.to ?? []; const cc = input.cc ?? []; const bcc = input.bcc ?? [];
     if (to.length + cc.length + bcc.length > config.MAIL_MAX_RECIPIENTS) throw problem('TOO_MANY_RECIPIENTS', 'Recipient limit exceeded');
@@ -199,16 +204,17 @@ export class AdminComposeController {
 }
 
 @SuperAdmin()
+@RequirePermission('outgoing.read')
 @Controller('admin/messages')
 export class AdminMessagesController {
   constructor(@Inject(Database) private readonly db: Database, @Inject(MailQueue) private readonly queue: MailQueue) {}
-  @Get() list() { return this.db.outgoingMessage.findMany({ take: 100, orderBy: { createdAt: 'desc' }, select: { id: true, subject: true, status: true, createdAt: true, attemptCount: true, lastErrorCode: true, project: { select: { id: true, name: true } }, fromMailbox: { select: { id: true, email: true } }, recipients: { where: { type: 'TO' }, select: { email: true } } } }); }
-  @Get(':id') async get(@Param('id') rawId: string) {
-    const item = await this.db.outgoingMessage.findUnique({ where: { id: parse(idSchema, rawId) }, select: { id: true, subject: true, textBody: true, status: true, queuedAt: true, processingAt: true, smtpAcceptedAt: true, failedAt: true, createdAt: true, attemptCount: true, lastErrorCode: true, lastErrorMessage: true, rfcMessageId: true, project: { select: { id: true, name: true } }, apiKey: { select: { id: true, name: true, keyPrefix: true } }, fromMailbox: { select: { id: true, email: true } }, recipients: { select: { type: true, email: true, name: true, smtpStatus: true, smtpResponse: true } }, attempts: { orderBy: { attemptNumber: 'desc' } } } });
+  @Get() list(@Req() request: AuthedRequest) { return this.db.outgoingMessage.findMany({ where: { fromMailbox: mailboxWhere(request.user) }, take: 100, orderBy: { createdAt: 'desc' }, select: { id: true, subject: true, status: true, createdAt: true, attemptCount: true, lastErrorCode: true, project: { select: { id: true, name: true } }, fromMailbox: { select: { id: true, email: true } }, recipients: { where: { type: 'TO' }, select: { email: true } } } }); }
+  @Get(':id') async get(@Param('id') rawId: string, @Req() request: AuthedRequest) {
+    const item = await this.db.outgoingMessage.findFirst({ where: { id: parse(idSchema, rawId), fromMailbox: mailboxWhere(request.user) }, select: { id: true, subject: true, textBody: true, status: true, queuedAt: true, processingAt: true, smtpAcceptedAt: true, failedAt: true, createdAt: true, attemptCount: true, lastErrorCode: true, lastErrorMessage: true, rfcMessageId: true, project: { select: { id: true, name: true } }, apiKey: { select: { id: true, name: true, keyPrefix: true } }, fromMailbox: { select: { id: true, email: true } }, recipients: { select: { type: true, email: true, name: true, smtpStatus: true, smtpResponse: true } }, attempts: { orderBy: { attemptNumber: 'desc' } } } });
     if (!item) throw problem('MESSAGE_NOT_FOUND', 'Message not found', 404);
     return item;
   }
-  @Post(':id/retry') async retry(@Param('id') rawId: string, @Req() request: AuthedRequest) {
+  @Post(':id/retry') @RequirePermission('outgoing.retry') async retry(@Param('id') rawId: string, @Req() request: AuthedRequest) {
     const id = parse(idSchema, rawId);
     const event = await this.db.$transaction(async tx => {
       const changed = await tx.outgoingMessage.updateMany({ where: { id, status: 'FAILED' }, data: { status: 'QUEUED', queuedAt: new Date(), failedAt: null } });
@@ -218,6 +224,6 @@ export class AdminMessagesController {
       return outbox;
     });
     try { await this.queue.publish(event.id, id); await this.db.outboxEvent.update({ where: { id: event.id }, data: { status: 'PUBLISHED', publishedAt: new Date() } }); } catch { /* durable outbox will retry */ }
-    return this.get(id);
+    return this.get(id, request);
   }
 }

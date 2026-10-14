@@ -1,11 +1,13 @@
 import { Body, Controller, HttpException, Inject, Param, Post, Req } from '@nestjs/common';
 import { z } from 'zod';
 import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { RequirePermission } from './access';
 
 const id = z.string().cuid();
 const generated = z.object({ mailboxId: id, apiKeyId: id }).strict();
 
 @SuperAdmin()
+@RequirePermission('projects.manage')
 @Controller('projects/:projectId/integration')
 export class ProjectIntegrationController {
   constructor(@Inject(Database) private readonly db: Database) {}

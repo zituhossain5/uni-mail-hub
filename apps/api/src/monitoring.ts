@@ -1,9 +1,10 @@
 import { Body, Controller, Get, HttpException, Inject, Injectable, OnModuleDestroy, OnModuleInit, Param, Post, Put, Query, Req } from '@nestjs/common';
 import { Queue } from 'bullmq';
 import Redis from 'ioredis';
-import { Prisma } from '@uni/database';
+import { Prisma, UserRole } from '@uni/database';
 import { z } from 'zod';
 import { AuthedRequest, Database, RedisConnection, SuperAdmin, parse } from './core';
+import { RequirePermission, mailboxWhere, projectWhere } from './access';
 
 const id = z.string().cuid();
 const selectorsInput = z.object({ selectors: z.array(z.string().trim().toLowerCase().regex(/^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/)).max(10) }).strict();
@@ -50,11 +51,34 @@ export class MonitoringWatchdog implements OnModuleInit, OnModuleDestroy {
 }
 
 @SuperAdmin()
+@RequirePermission('monitoring.read')
 @Controller('monitoring')
 export class MonitoringController {
   constructor(@Inject(Database) private readonly db: Database, @Inject(RedisConnection) private readonly redis: RedisConnection, @Inject(MonitoringQueue) private readonly queue: MonitoringQueue) {}
 
-  @Get() async summary() {
+  private async targetScope(request: AuthedRequest) {
+    const [projects, domains, mailboxes] = await Promise.all([
+      this.db.project.findMany({ where: projectWhere(request.user), select: { id: true } }),
+      this.db.domain.findMany({ where: { project: projectWhere(request.user) }, select: { id: true } }),
+      this.db.mailbox.findMany({ where: mailboxWhere(request.user), select: { id: true } }),
+    ]);
+    return { OR: [
+      { targetType: 'PROJECT', targetId: { in: projects.map(row => row.id) } },
+      { targetType: 'DOMAIN', targetId: { in: domains.map(row => row.id) } },
+      { targetType: 'MAILBOX', targetId: { in: mailboxes.map(row => row.id) } },
+    ] };
+  }
+
+  @Get() async summary(@Req() request: AuthedRequest) {
+    if (request.user.role !== UserRole.SUPER_ADMIN && request.user.role !== UserRole.ADMIN) {
+      const scope = await this.targetScope(request);
+      const [issues, run] = await Promise.all([
+        this.db.monitoringIssue.findMany({ where: { status: 'OPEN', ...scope }, orderBy: { lastDetectedAt: 'desc' }, take: 200 }),
+        this.db.monitoringRun.findFirst({ where: { status: { in: ['SUCCESS', 'PARTIAL'] } }, orderBy: { completedAt: 'desc' }, select: { id: true } }),
+      ]);
+      const results = run ? await this.db.monitoringResult.findMany({ where: { runId: run.id, ...scope }, orderBy: { checkedAt: 'desc' }, take: 3000 }) : [];
+      return { lastRun: null, lastResultRun: null, runs: [], issues, results, live: { redis: 'UNKNOWN', worker: 'UNKNOWN' } };
+    }
     const [lastRun, lastResultRun, issues, runs] = await Promise.all([
       this.db.monitoringRun.findFirst({ orderBy: { createdAt: 'desc' } }),
       this.db.monitoringRun.findFirst({ where: { status: { in: ['SUCCESS', 'PARTIAL'] } }, orderBy: { completedAt: 'desc' } }),
@@ -73,18 +97,19 @@ export class MonitoringController {
     return { lastRun, lastResultRun, runs, issues, results, live: { redis, worker } };
   }
 
-  @Get('issues') async issues(@Query('status') rawStatus?: string, @Query('cursor') rawCursor?: string) {
+  @Get('issues') async issues(@Req() request: AuthedRequest, @Query('status') rawStatus?: string, @Query('cursor') rawCursor?: string) {
     const status = parse(z.enum(['OPEN', 'RESOLVED']), rawStatus ?? 'OPEN');
     const cursor = rawCursor ? parse(id, rawCursor) : undefined;
+    const scope = request.user.role === UserRole.SUPER_ADMIN || request.user.role === UserRole.ADMIN ? {} : await this.targetScope(request);
     const [rows, total] = await Promise.all([
-      this.db.monitoringIssue.findMany({ where: { status }, orderBy: [{ lastDetectedAt: 'desc' }, { id: 'desc' }], take: 101, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) }),
-      this.db.monitoringIssue.count({ where: { status } }),
+      this.db.monitoringIssue.findMany({ where: { status, ...scope }, orderBy: [{ lastDetectedAt: 'desc' }, { id: 'desc' }], take: 101, ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}) }),
+      this.db.monitoringIssue.count({ where: { status, ...scope } }),
     ]);
     return { items: rows.slice(0, 100), nextCursor: rows.length > 100 ? rows[99]!.id : null, total };
   }
-  @Get('runs') runs() { return this.db.monitoringRun.findMany({ orderBy: { createdAt: 'desc' }, take: 50 }); }
+  @Get('runs') runs(@Req() request: AuthedRequest) { return request.user.role === UserRole.SUPER_ADMIN || request.user.role === UserRole.ADMIN ? this.db.monitoringRun.findMany({ orderBy: { createdAt: 'desc' }, take: 50 }) : []; }
 
-  @Post('runs') async run(@Req() request: AuthedRequest) {
+  @Post('runs') @RequirePermission('monitoring.run') async run(@Req() request: AuthedRequest) {
     let active = await this.db.monitoringRun.findFirst({ where: { status: { in: ['QUEUED', 'RUNNING'] } } });
     if (active && !await this.redis.client.exists('monitor:run:lease')) {
       const stale = active.status === 'RUNNING' ? !!active.startedAt && Date.now() - active.startedAt.getTime() > 30000 : Date.now() - active.createdAt.getTime() > 120000;
@@ -104,16 +129,16 @@ export class MonitoringController {
     return run;
   }
 
-  @Get('domains/:id') async domain(@Param('id') rawId: string) {
+  @Get('domains/:id') async domain(@Param('id') rawId: string, @Req() request: AuthedRequest) {
     const domainId = parse(id, rawId);
-    const domain = await this.db.domain.findUnique({ where: { id: domainId }, select: { id: true, domain: true, dkimSelectors: true, status: true } });
+    const domain = await this.db.domain.findFirst({ where: { id: domainId, project: projectWhere(request.user) }, select: { id: true, domain: true, dkimSelectors: true, status: true } });
     if (!domain) throw new HttpException({ code: 'DOMAIN_NOT_FOUND', message: 'Domain not found.' }, 404);
     const history = await this.db.monitoringResult.findMany({ where: { targetType: 'DOMAIN', targetId: domainId }, orderBy: { checkedAt: 'desc' }, take: 100 });
     const latest = [...new Map(history.reverse().map(result => [result.checkType, result])).values()];
     return { domain, results: latest };
   }
 
-  @Put('domains/:id/dkim-selectors') async selectors(@Param('id') rawId: string, @Body() body: unknown, @Req() request: AuthedRequest) {
+  @Put('domains/:id/dkim-selectors') @RequirePermission('monitoring.run') async selectors(@Param('id') rawId: string, @Body() body: unknown, @Req() request: AuthedRequest) {
     const domainId = parse(id, rawId);
     const { selectors } = parse(selectorsInput, body);
     const unique = [...new Set(selectors)];

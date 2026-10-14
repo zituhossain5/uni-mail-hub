@@ -99,7 +99,7 @@ try {
   assert.equal((await search({ mailboxIds: a.mailbox.id, q: '%' })).data.items.length, 0);
   assert.equal((await search({ mailboxIds: both }, null)).status, 401);
   const memberPassword = `member-${suffix}`;
-  const member = await db.user.create({ data: { name: 'Module 7 member', email: `member-${suffix}@example.test`, role: 'MEMBER', passwordHash: await argon2.hash(memberPassword) } }); created.member = member.id;
+  const member = await db.user.create({ data: { name: 'Module 7 member', email: `member-${suffix}@example.test`, role: 'VIEWER', passwordHash: await argon2.hash(memberPassword) } }); created.member = member.id;
   const memberCookie = await login(member.email, memberPassword);
   assert.equal((await search({ mailboxIds: both }, memberCookie)).status, 403);
   await db.mailMessage.update({ where: { id: older.id }, data: { isSeen: true, isFlagged: false } });

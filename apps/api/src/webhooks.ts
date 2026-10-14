@@ -6,6 +6,7 @@ import { readConfig } from '@uni/config';
 import { encryptSecret, decodeEncryptionKey, generateWebhookSecret } from '@uni/security';
 import { resolveWebhookTarget, webhookEventTypes } from '@uni/mail';
 import { AuthedRequest, Database, SuperAdmin, parse } from './core';
+import { RequirePermission } from './access';
 
 const id = z.string().cuid();
 const eventType = z.enum(webhookEventTypes);
@@ -17,6 +18,7 @@ const problem = (code: string, message: string, status = 400) => new HttpExcepti
 export const webhookEndpointSelect = { id: true, projectId: true, name: true, url: true, status: true, subscriptions: true, createdAt: true, updatedAt: true, lastDeliveryAt: true } as const;
 
 @SuperAdmin()
+@RequirePermission('projects.manage')
 @Controller('admin/projects/:projectId/webhooks')
 export class WebhooksController {
   constructor(@Inject(Database) private readonly db: Database) {}
@@ -114,6 +116,7 @@ export class WebhooksController {
 }
 
 @SuperAdmin()
+@RequirePermission('projects.manage')
 @Controller('admin/projects/:projectId/suppressions')
 export class SuppressionsController {
   constructor(@Inject(Database) private readonly db: Database) {}

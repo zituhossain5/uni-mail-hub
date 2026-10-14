@@ -6,6 +6,7 @@ import type { Request, Response } from 'express';
 import Redis from 'ioredis';
 import pino from 'pino';
 import { ZodError, type ZodSchema } from 'zod';
+import { AccessPolicy, can, type Permission } from './access';
 
 export const Public = () => SetMetadata('public', true);
 export const SuperAdmin = () => SetMetadata('superAdmin', true);
@@ -41,8 +42,15 @@ export class AuthGuard implements CanActivate {
       if (!session || session.userId !== payload.sub || session.revokedAt || session.expiresAt <= new Date()) throw new UnauthorizedException();
       const user = await this.db.user.findUnique({ where: { id: payload.sub }, select: { id: true, role: true, email: true, name: true, isActive: true } });
       if (!user?.isActive) throw new UnauthorizedException();
-      if (this.reflector.getAllAndOverride<boolean>('superAdmin', [context.getHandler(), context.getClass()]) && user.role !== UserRole.SUPER_ADMIN) throw new ForbiddenException();
       request.user = { id: user.id, role: user.role, email: user.email, name: user.name, sessionId: payload.sid };
+      const permission = this.reflector.getAllAndOverride<Permission>('permission', [context.getHandler(), context.getClass()]);
+      if (permission) {
+        if (!can(user.role, permission)) throw new ForbiddenException();
+        const params = (request.params ?? {}) as Record<string, string>;
+        const policy = new AccessPolicy(this.db);
+        if (permission.startsWith('mail.') && (params.mailboxId || params.id)) await policy.mailbox(request.user, params.mailboxId ?? params.id!, permission);
+        if (permission === 'mailbox.manage' && params.id && request.originalUrl?.startsWith('/api/v1/mailboxes/')) await policy.mailbox(request.user, params.id, permission);
+      } else if (this.reflector.getAllAndOverride<boolean>('superAdmin', [context.getHandler(), context.getClass()]) && user.role !== UserRole.SUPER_ADMIN) throw new ForbiddenException();
       if (Date.now() - session.lastUsedAt.getTime() > 60_000) await this.db.userSession.updateMany({ where: { id: payload.sid, revokedAt: null }, data: { lastUsedAt: new Date() } });
       return true;
     } catch (error) {
