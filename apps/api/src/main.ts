@@ -6,6 +6,7 @@ import { NestExpressApplication } from '@nestjs/platform-express';
 import { JwtModule } from '@nestjs/jwt';
 import { SkipThrottle, ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import helmet from 'helmet';
+import { json } from 'express';
 import { randomUUID } from 'node:crypto';
 import { UserRole } from '@uni/database';
 import { readConfig } from '@uni/config';
@@ -54,11 +55,16 @@ class HealthController {
 class AppModule {}
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: new JsonLogger() });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { logger: new JsonLogger(), bodyParser:false });
   if (config.NODE_ENV === 'production') app.set('trust proxy', 1);
   app.enableShutdownHooks(['SIGTERM', 'SIGINT']);
   app.setGlobalPrefix('api/v1');
-  app.useBodyParser('json', { limit: '2mb' });
+  const regularJson = json({ limit:'2mb' });
+  const attachmentJson = json({ limit:'30mb' });
+  app.use((request: import('express').Request, response: import('express').Response, next: import('express').NextFunction) => {
+    const acceptsFiles = request.method === 'POST' && /^\/api\/v1\/(admin\/compose|messages)\/?$/.test(request.path);
+    return (acceptsFiles ? attachmentJson : regularJson)(request,response,next);
+  });
   app.use(helmet({ hsts: config.NODE_ENV === 'production' }));
   app.use((_request: unknown, response: { setHeader: (name: string, value: string) => void }, next: () => void) => { response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()'); next(); });
   const allowedOrigins = config.ALLOWED_ORIGINS?.split(',').map(value => value.trim()).filter(Boolean);

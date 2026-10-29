@@ -1,4 +1,5 @@
 import 'reflect-metadata';
+import './request-origin.test';
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { createRequire } from 'node:module';

@@ -1,0 +1,27 @@
+name: uni-mail-hub-inbox-dev
+
+services:
+  live-api-proxy:
+    # Reuse an installed Node runtime image; no application build or release.
+    image: ${INBOX_DEV_PROXY_IMAGE:?Set the existing Node runtime image}
+    entrypoint: [node, /dev-bridge/live-api-proxy.mjs]
+    ports:
+      - '127.0.0.1:4396:4000'
+    volumes:
+      - ./scripts/dev/live-api-proxy.mjs:/dev-bridge/live-api-proxy.mjs:ro
+    networks: [front]
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      test: [CMD, node, -e, "fetch('http://127.0.0.1:4000/api/v1/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 10s
+
+networks:
+  front:
+    external: true
+    name: uni-mail-hub_front

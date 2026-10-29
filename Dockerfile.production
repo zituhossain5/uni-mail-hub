@@ -23,7 +23,7 @@ COPY packages/uni-mail-client/package.json packages/uni-mail-client/package.json
 FROM manifests AS dependencies
 RUN pnpm install --frozen-lockfile
 
-FROM dependencies AS build
+FROM dependencies AS backend-build
 COPY . .
 RUN pnpm --filter @uni/database exec prisma generate --schema prisma/schema.prisma \
  && pnpm --filter @uni/shared build \
@@ -32,8 +32,10 @@ RUN pnpm --filter @uni/database exec prisma generate --schema prisma/schema.pris
  && pnpm --filter @uni/mail build \
  && pnpm --filter @unicodeit/uni-mail build \
  && pnpm --filter @uni/api build \
- && pnpm --filter @uni/worker build \
- && pnpm --filter @uni/web build
+ && pnpm --filter @uni/worker build
+
+FROM backend-build AS build
+RUN pnpm --filter @uni/web build
 
 FROM manifests AS production-dependencies
 ARG SERVICE=api
@@ -47,20 +49,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-cert
 COPY --from=production-dependencies --chown=node:node /app/node_modules ./node_modules
 COPY --from=production-dependencies --chown=node:node /app/apps ./apps
 COPY --from=production-dependencies --chown=node:node /app/packages ./packages
-COPY --from=build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
-COPY --from=build --chown=node:node /app/packages/config/dist ./packages/config/dist
-COPY --from=build --chown=node:node /app/packages/security/dist ./packages/security/dist
-COPY --from=build --chown=node:node /app/packages/mail/dist ./packages/mail/dist
-COPY --from=build --chown=node:node /app/packages/database/generated ./packages/database/generated
+COPY --from=backend-build --chown=node:node /app/packages/shared/dist ./packages/shared/dist
+COPY --from=backend-build --chown=node:node /app/packages/config/dist ./packages/config/dist
+COPY --from=backend-build --chown=node:node /app/packages/security/dist ./packages/security/dist
+COPY --from=backend-build --chown=node:node /app/packages/mail/dist ./packages/mail/dist
+COPY --from=backend-build --chown=node:node /app/packages/database/generated ./packages/database/generated
 USER node
 
 FROM runtime AS api
-COPY --from=build --chown=node:node /app/apps/api/dist ./apps/api/dist
+COPY --from=backend-build --chown=node:node /app/apps/api/dist ./apps/api/dist
 EXPOSE 4000
 CMD ["node", "apps/api/dist/main.js"]
 
 FROM runtime AS worker
-COPY --from=build --chown=node:node /app/apps/worker/dist ./apps/worker/dist
+COPY --from=backend-build --chown=node:node /app/apps/worker/dist ./apps/worker/dist
 COPY --chown=node:node apps/worker/health.mjs ./apps/worker/health.mjs
 CMD ["node", "apps/worker/dist/main.js"]
 
@@ -73,7 +75,7 @@ USER node
 EXPOSE 3000
 CMD ["node", "apps/web/server.js"]
 
-FROM build AS ops
+FROM backend-build AS ops
 RUN apt-get update && apt-get install -y --no-install-recommends postgresql-client-15 ca-certificates && rm -rf /var/lib/apt/lists/*
 RUN mkdir /backups && chown node:node /backups
 USER node

@@ -1,6 +1,36 @@
 {
-  "name":"@uni/web","version":"0.1.0","private":true,
-  "scripts":{"dev":"next dev --hostname 127.0.0.1","build":"next build","start":"next start --hostname 127.0.0.1","typecheck":"tsc --noEmit"},
-  "dependencies":{"@uni/shared":"workspace:*","clsx":"^2.0.0","lucide-react":"^0.468.0","next":"^16.0.0","react":"^19.0.0","react-dom":"^19.0.0"},
-  "devDependencies":{"@types/react":"^19.0.0","@types/react-dom":"^19.0.0","autoprefixer":"^10.0.0","postcss":"^8.0.0","tailwindcss":"^3.4.0"}
+  "name": "@uni/web",
+  "version": "0.1.0",
+  "private": true,
+  "scripts": {
+    "dev": "next dev --hostname 127.0.0.1",
+    "build": "next build",
+    "start": "next start --hostname 127.0.0.1",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@tiptap/core": "^3.32.0",
+    "@tiptap/extension-image": "^3.32.0",
+    "@tiptap/extension-placeholder": "^3.32.0",
+    "@tiptap/extension-table": "^3.32.0",
+    "@tiptap/extension-text-align": "^3.32.0",
+    "@tiptap/extension-text-style": "^3.32.0",
+    "@tiptap/pm": "^3.32.0",
+    "@tiptap/react": "^3.32.0",
+    "@tiptap/starter-kit": "^3.32.0",
+    "@uni/shared": "workspace:*",
+    "clsx": "^2.0.0",
+    "dompurify": "^3.4.17",
+    "lucide-react": "^0.468.0",
+    "next": "^16.0.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "autoprefixer": "^10.0.0",
+    "postcss": "^8.0.0",
+    "tailwindcss": "^3.4.0"
+  }
 }

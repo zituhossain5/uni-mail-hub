@@ -2,6 +2,8 @@
 
 Uni Mail Hub accepts small transactional and operational messages from applications. Applications keep a project API key; only Uni Mail Hub holds SMTP configuration and encrypted mailbox credentials. The API is at `http://127.0.0.1:4000/api/v1` in the local setup.
 
+> The live API supports pasted inline images and file attachments. See [Compose images and attachments](compose-attachments.md) for the payload, limits, and dev frontend behavior.
+
 ## Create a sender key
 
 In the admin UI, create or select a Project, configure an SMTP Mail Server, and assign it to a Mailbox in that Project. Open **API Keys**, select that Project and one or more sender Mailboxes, optionally set an expiration, and create a key. Copy the `umh_test_...` value from the creation dialog immediately. The raw value is never returned by list or detail endpoints. To rotate, create a replacement key, update clients, then revoke the previous key. Disabling is reversible; revocation is permanent. An API key can send only from its selected mailboxes, and grants can be edited from the API Keys page.
@@ -32,7 +34,7 @@ Example `202 Accepted` body (IDs and times vary):
 {"id":"cm123example","status":"QUEUED","createdAt":"2026-10-04T12:00:00.000Z"}
 ```
 
-At least one address is required across `to`, `cc`, and `bcc`; each is an array with the `{ email, name? }` shape. `replyTo` is an optional address object. Supply at least one of `text` or `html`. The sender address and display name come from the authorized mailbox. The strict request schema rejects SMTP credentials, custom headers, arbitrary From addresses, and attachments. Limits default to 50 total recipients and 1 MiB of JSON request content; see environment settings below.
+At least one address is required across `to`, `cc`, and `bcc`; each is an array with the `{ email, name? }` shape. `replyTo` is an optional address object. Supply at least one of `text`, `html`, or a file in `attachments`. The sender address and display name come from the authorized mailbox. The strict request schema rejects SMTP credentials, custom headers, arbitrary From addresses, and attachment file paths or download URLs. Optional `attachments` contain `filename`, `contentType`, `contentBase64`, `disposition` (`attachment` or `inline`), and an optional `contentId`. Inline raster images require a content ID referenced by `cid:` in the HTML. Limits are 20 files, 10 MiB per file, and 20 MiB combined. The send route accepts JSON up to 30 MiB for base64 overhead; the envelope/text/HTML limit defaults to 1 MiB and the recipient limit defaults to 50. See environment settings below.
 
 `Idempotency-Key` is required and must contain 1–128 letters, digits, `.`, `_`, `:`, or `-`. Repeating the same request body with the same key and API key returns the existing message ID. Reusing that idempotency key with changed content returns `409 IDEMPOTENCY_CONFLICT`. Different API keys have separate idempotency spaces. If the API returns `503 QUEUE_UNAVAILABLE`, the message has been saved in PostgreSQL; retry with **the same** idempotency key and body. The worker also republishes due outbox records.
 

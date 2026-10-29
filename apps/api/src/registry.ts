@@ -3,7 +3,7 @@ import { domainSchema, mailboxSchema, projectSchema } from '@uni/shared';
 import { z } from 'zod';
 import { AuthedRequest, Database, RedisConnection, SuperAdmin, parse } from './core';
 import { AccessPolicy, RequirePermission, mailboxWhere, projectWhere } from './access';
-import { UserRole } from '@uni/database';
+import { Prisma, UserRole } from '@uni/database';
 
 const idSchema = z.string().cuid();
 const projectPatch = projectSchema.partial().refine((value) => Object.keys(value).length > 0);
@@ -157,6 +157,41 @@ export class MailboxesController {
 @Controller('dashboard')
 export class DashboardController {
   constructor(@Inject(Database) private readonly db: Database, @Inject(RedisConnection) private readonly redis: RedisConnection) {}
+
+  @Get('activity') @RequirePermission('outgoing.read') async activity(@Req() request: AuthedRequest) {
+    const end = new Date();
+    end.setUTCHours(0, 0, 0, 0);
+    end.setUTCDate(end.getUTCDate() + 1);
+    const start = new Date(end.getTime() - 30 * 86_400_000);
+    const filters = [Prisma.sql`o."createdAt" >= ${start} AND o."createdAt" < ${end}`];
+    if (request.user.role !== UserRole.SUPER_ADMIN && request.user.role !== UserRole.ADMIN) {
+      filters.push(Prisma.sql`EXISTS (SELECT 1 FROM "ProjectMember" pm WHERE pm."projectId" = b."projectId" AND pm."userId" = ${request.user.id})`);
+      if (request.user.role !== UserRole.MANAGER) filters.push(Prisma.sql`EXISTS (SELECT 1 FROM "UserMailboxAccess" ma WHERE ma."mailboxId" = b.id AND ma."userId" = ${request.user.id})`);
+    }
+    const [counts, recentMessages] = await Promise.all([
+      this.db.$queryRaw<{ date: string; count: number }[]>(Prisma.sql`
+        SELECT TO_CHAR(o."createdAt", 'YYYY-MM-DD') AS date, COUNT(*)::int AS count
+        FROM "OutgoingMessage" o JOIN "Mailbox" b ON b.id = o."fromMailboxId"
+        WHERE ${Prisma.join(filters, ' AND ')}
+        GROUP BY TO_CHAR(o."createdAt", 'YYYY-MM-DD') ORDER BY date
+      `),
+      this.db.outgoingMessage.findMany({
+        where: { fromMailbox: mailboxWhere(request.user) },
+        take: 5, orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        select: {
+          id: true, subject: true, status: true, createdAt: true,
+          recipients: { where: { type: 'TO' }, take: 1, orderBy: { id: 'asc' }, select: { email: true } },
+        },
+      }),
+    ]);
+    const byDate = new Map(counts.map(row => [row.date, row.count]));
+    const daily = Array.from({ length: 30 }, (_, index) => {
+      const date = new Date(start.getTime() + index * 86_400_000).toISOString().slice(0, 10);
+      return { date, count: byDate.get(date) ?? 0 };
+    });
+    return { daily, recentMessages, timeZone: 'UTC' };
+  }
+
   @Get() async get(@Req() request: AuthedRequest) {
     if (request.user.role !== UserRole.SUPER_ADMIN && request.user.role !== UserRole.ADMIN) {
       const scoped = mailboxWhere(request.user);

@@ -37,6 +37,8 @@
     "test:module13:integration": "dotenv -e .env -- tsx scripts/retention.integration.test.ts",
     "test:module14": "tsx scripts/recovery.test.ts && tsx scripts/imap-load.test.ts",
     "test:module16": "tsx scripts/rbac.test.ts",
+    "test:compose": "pnpm --filter @uni/shared build && pnpm --filter @uni/mail build && pnpm --filter @uni/api build && tsx scripts/sending.test.ts && tsx scripts/compose-attachments.test.ts",
+    "test:dashboard": "pnpm --filter @uni/api build && tsx scripts/dashboard.test.ts",
     "perf:test": "pnpm --filter @uni/config build && pnpm --filter @uni/api build && pnpm --filter @uni/worker build && dotenv -e .env -- node scripts/perf/module14.mjs run",
     "perf:cleanup": "dotenv -e .env -- node scripts/perf/module14.mjs cleanup",
     "recovery:test": "pnpm --filter @uni/config build && pnpm --filter @uni/api build && pnpm --filter @uni/worker build && dotenv -e .env -- node scripts/perf/module14.mjs run --recovery",

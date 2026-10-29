@@ -2,11 +2,11 @@
 import { useEffect, useRef, type ReactNode } from 'react';
 import { X } from 'lucide-react';
 
-export function Dialog({ open, title, description, children, footer, onClose, dismissible = true, size = 'default' }: { open: boolean; title: string; description?: string; children: ReactNode; footer?: ReactNode; onClose: () => void; dismissible?: boolean; size?: 'default' | 'wide' }) {
+export function Dialog({ open, title, description, children, footer, onClose, dismissible = true, size = 'default', className = '', headerActions }: { open: boolean; title: string; description?: string; children: ReactNode; footer?: ReactNode; onClose: () => void; dismissible?: boolean; size?: 'default' | 'wide'; className?: string; headerActions?: ReactNode }) {
   const ref = useRef<HTMLDialogElement>(null);
   useEffect(() => { const dialog = ref.current; if (!dialog) return; if (open && !dialog.open) dialog.showModal(); else if (!open && dialog.open) dialog.close(); }, [open]);
-  return <dialog ref={ref} className={`app-dialog ${size === 'wide' ? 'app-dialog-wide' : ''}`} aria-label={title} onKeyDown={event => { if (event.key === 'Escape') { if (!dismissible) event.preventDefault(); else onClose(); } }} onCancel={event => { if (!dismissible) event.preventDefault(); else onClose(); }} onClose={() => { if (open && dismissible) onClose(); }}>
-    <div className="dialog-header"><div><h2>{title}</h2>{description && <p>{description}</p>}</div>{dismissible && <button type="button" className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={20}/></button>}</div>
+  return <dialog ref={ref} className={`app-dialog ${size === 'wide' ? 'app-dialog-wide' : ''} ${className}`} aria-label={title} onKeyDown={event => { if (event.key === 'Escape') { if (!dismissible) event.preventDefault(); else onClose(); } }} onCancel={event => { if (!dismissible) event.preventDefault(); else onClose(); }} onClose={() => { if (open && dismissible) onClose(); }}>
+    <div className="dialog-header"><div><h2>{title}</h2>{description && <p>{description}</p>}</div><div className="dialog-header-actions">{headerActions}{dismissible && <button type="button" className="icon-button" aria-label="Close dialog" onClick={onClose}><X size={20}/></button>}</div></div>
     <div className="dialog-content">{children}</div>{footer && <div className="dialog-footer">{footer}</div>}
   </dialog>;
 }

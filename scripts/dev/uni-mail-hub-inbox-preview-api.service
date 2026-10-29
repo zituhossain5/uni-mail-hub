@@ -1,0 +1,18 @@
+[Unit]
+Description=Uni Mail Hub isolated inbox preview data
+After=network.target
+
+[Service]
+Type=simple
+User=zitu
+Group=zitu
+WorkingDirectory=/opt/uni-mail-hub
+EnvironmentFile=/opt/uni-mail-hub/.env.inbox-preview
+ExecStart=/usr/bin/node /opt/uni-mail-hub/scripts/dev/inbox-preview.mjs
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

@@ -3,6 +3,7 @@ import path from 'node:path';
 const config: NextConfig = {
   reactStrictMode: true,
   poweredByHeader: false,
+  ...(process.env.NODE_ENV === 'development' && process.env.DEV_ALLOWED_HOST ? { allowedDevOrigins: [process.env.DEV_ALLOWED_HOST] } : {}),
   output: 'standalone',
   outputFileTracingRoot: path.resolve(__dirname, '../..'),
   async headers() {

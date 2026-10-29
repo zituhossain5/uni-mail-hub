@@ -9,6 +9,7 @@
 **/tsconfig.tsbuildinfo
 packages/database/generated
 .local-backups
+.local-production-test
 .pnpm-store
 coverage
 *.log

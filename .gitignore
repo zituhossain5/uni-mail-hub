@@ -12,6 +12,9 @@ coverage/
 packages/database/generated/
 /.local-backups/
 /.local-production-test/
+/output/
+/docker-compose.vps.yml
+/docker-compose.vps.yml.before-rbac
 *.dump
 *.sql.gz
 *.backup

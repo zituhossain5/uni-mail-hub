@@ -648,6 +648,7 @@ model OutgoingMessage {
   rfcMessageId String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  attachments OutgoingAttachment[]
   recipients OutgoingRecipient[]
   attempts SmtpAttempt[]
   outboxEvents OutboxEvent[]
@@ -657,6 +658,21 @@ model OutgoingMessage {
   @@unique([createdByUserId, idempotencyKey], map: "OutgoingMessage_admin_idempotency_key")
   @@index([projectId, createdAt])
   @@index([status, createdAt])
+}
+
+model OutgoingAttachment {
+  id String @id @default(cuid())
+  messageId String
+  message OutgoingMessage @relation(fields: [messageId], references: [id], onDelete: Cascade)
+  filename String
+  contentType String
+  content Bytes
+  sizeBytes Int
+  disposition String
+  contentId String?
+
+  @@index([messageId])
+  @@unique([messageId, contentId])
 }
 
 model OutgoingRecipient {

@@ -21,6 +21,7 @@
     "@uni/shared": "workspace:*",
     "argon2": "^0.44.0",
     "bullmq": "^5.0.0",
+    "express": "5.2.1",
     "helmet": "^8.0.0",
     "ioredis": "^5.0.0",
     "pino": "^9.0.0",

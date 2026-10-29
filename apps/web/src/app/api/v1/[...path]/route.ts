@@ -1,32 +1,10 @@
 import { cookies } from 'next/headers';
 import { NextRequest, NextResponse } from 'next/server';
-
-function allowedOrigin(request: NextRequest) {
-  const origin = request.headers.get('origin');
-  const configuredOrigin = process.env.WEB_URL;
-  if (!origin || !configuredOrigin) return false;
-  try {
-    const browser = new URL(origin);
-    const configured = new URL(configuredOrigin);
-    if (browser.origin === configured.origin) return true;
-
-    // Local development may use either loopback spelling on the same port.
-    // Require the browser origin to match the request URL to keep CSRF protection.
-    const loopback = (hostname: string) => hostname === 'localhost' || hostname === '127.0.0.1';
-    return process.env.NODE_ENV !== 'production'
-      && loopback(configured.hostname)
-      && loopback(request.nextUrl.hostname)
-      && browser.origin === request.nextUrl.origin
-      && browser.protocol === configured.protocol
-      && browser.port === configured.port;
-  } catch {
-    return false;
-  }
-}
+import { allowedRequestOrigin } from '@/lib/request-origin';
 
 async function relay(request: NextRequest, context: { params: Promise<{ path: string[] }> }) {
   const { path } = await context.params;
-  if (request.method !== 'GET' && !allowedOrigin(request)) return NextResponse.json({ statusCode: 403, code: 'BAD_ORIGIN', message: 'Invalid origin' }, { status: 403 });
+  if (request.method !== 'GET' && !allowedRequestOrigin(request, process.env.WEB_URL, process.env.NODE_ENV)) return NextResponse.json({ statusCode: 403, code: 'BAD_ORIGIN', message: 'Invalid origin' }, { status: 403 });
   const api = process.env.API_URL;
   if (!api) return NextResponse.json({ statusCode: 503, code: 'CONFIG_ERROR', message: 'API_URL is missing' }, { status: 503 });
   const cookieStore = await cookies();
@@ -37,7 +15,7 @@ async function relay(request: NextRequest, context: { params: Promise<{ path: st
   if (isLogout && !token) return NextResponse.json({ success: true });
   if (!isLogin && !isInvitation && !token) return NextResponse.json({ statusCode: 401, code: 'UNAUTHORIZED', message: 'Sign in required' }, { status: 401 });
   try {
-    const maxBodyBytes = 2 * 1024 * 1024;
+    const maxBodyBytes = request.method === 'POST' && ['admin/compose','messages'].includes(path.join('/')) ? 30 * 1024 * 1024 : 2 * 1024 * 1024;
     const oversized = () => NextResponse.json({ statusCode: 413, code: 'PAYLOAD_TOO_LARGE', message: 'Request too large' }, { status: 413 });
     if (Number(request.headers.get('content-length')) > maxBodyBytes) return oversized();
     let body: string | undefined;

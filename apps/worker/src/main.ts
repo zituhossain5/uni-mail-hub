@@ -136,7 +136,7 @@ async function recoverStale() {
 async function processMessage(messageId: string) {
   const claimed = await db.outgoingMessage.updateMany({ where: { id: messageId, status: { in: ['QUEUED', 'RETRY_SCHEDULED'] } }, data: { status: 'PROCESSING', processingAt: new Date(), attemptCount: { increment: 1 }, lastErrorCode: preSmtpMarker, lastErrorMessage: null } });
   if (!claimed.count) return;
-  const message = await db.outgoingMessage.findUniqueOrThrow({ where: { id: messageId }, include: { recipients: true, fromMailbox: { include: { mailServer: true, credential: true } } } });
+  const message = await db.outgoingMessage.findUniqueOrThrow({ where: { id: messageId }, include: { attachments: true, recipients: true, fromMailbox: { include: { mailServer: true, credential: true } } } });
   const startedAt = new Date();
   const mailbox = message.fromMailbox;
   let accepted: string[] = []; let rejected: string[] = []; let pending: string[] = [];
@@ -156,7 +156,7 @@ async function processMessage(messageId: string) {
     const marked = await db.outgoingMessage.updateMany({ where: { id: messageId, status: 'PROCESSING', attemptCount: message.attemptCount, lastErrorCode: preSmtpMarker }, data: { lastErrorCode: smtpPendingMarker, processingAt: new Date() } });
     if (!marked.count) return;
     smtpInvoked = true;
-    const result = await sendSmtp({ endpoint: { host: server.smtpHost, port: server.smtpPort, security: server.smtpSecurity }, auth, from: { email: mailbox.email, name: mailbox.displayName }, to: recipients('TO'), cc: recipients('CC'), bcc: recipients('BCC'), replyTo: message.replyToEmail ? { email: message.replyToEmail, name: message.replyToName } : null, subject: message.subject, text: message.textBody, html: message.htmlBody, inReplyTo: message.inReplyTo, references: message.references });
+    const result = await sendSmtp({ endpoint: { host: server.smtpHost, port: server.smtpPort, security: server.smtpSecurity }, auth, from: { email: mailbox.email, name: mailbox.displayName }, to: recipients('TO'), cc: recipients('CC'), bcc: recipients('BCC'), replyTo: message.replyToEmail ? { email: message.replyToEmail, name: message.replyToName } : null, subject: message.subject, text: message.textBody, html: message.htmlBody, attachments:message.attachments.map(file => ({ filename:file.filename, contentType:file.contentType, content:Buffer.from(file.content), contentDisposition:file.disposition === 'inline' ? 'inline' as const : 'attachment' as const, cid:file.contentId ?? undefined })), inReplyTo: message.inReplyTo, references: message.references });
     accepted = result.accepted; rejected = result.rejected; pending = result.pending; rfcMessageId = result.messageId; responseCode = result.responseCode;
     if (!accepted.length) throw { code: 'SMTP_RECIPIENT_REJECTED', responseCode: responseCode ?? 550 };
   } catch (error) {

@@ -2,6 +2,7 @@
 import { FormEvent, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Dialog } from './dialog';
+import { requestKey } from '@/lib/request-key';
 
 export type ResponseKind = 'REPLY' | 'REPLY_ALL' | 'FORWARD';
 type Draft = { kind: ResponseKind; to: { email: string; name: string | null }[]; cc: { email: string; name: string | null }[]; subject: string; text: string; attachmentCount: number; threadingAvailable: boolean };
@@ -27,9 +28,9 @@ export function WebmailResponse({ mailboxId, sourceMessageId, kind, onClose }: {
     event.preventDefault();
     if (busy || !draft) return;
     const form = new FormData(event.currentTarget);
-    idempotency.current ||= window.crypto.randomUUID();
     setBusy(true); setError('');
     try {
+      idempotency.current ||= requestKey();
       const response = await fetch('/api/v1/admin/compose/respond', { method: 'POST', headers: { 'Content-Type': 'application/json', 'Idempotency-Key': idempotency.current }, body: JSON.stringify({ fromMailboxId: mailboxId, sourceMessageId, kind, text, ...(kind === 'FORWARD' ? { to: addresses(String(form.get('to') ?? '')), cc: addresses(String(form.get('cc') ?? '')), bcc: addresses(String(form.get('bcc') ?? '')) } : {}) }) });
       const result = await response.json();
       if (!response.ok) throw new Error(result.message ?? 'Unable to queue response.');

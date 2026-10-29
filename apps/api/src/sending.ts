@@ -7,7 +7,7 @@ import { Prisma } from '@uni/database';
 import { readConfig } from '@uni/config';
 import { hashApiKey } from '@uni/security';
 import { forwardedBlock, replyRecipients, responseHeaders, responseSubject } from '@uni/mail';
-import { sendMessageSchema } from '@uni/shared';
+import { mailAttachmentLimits, sendMessageSchema } from '@uni/shared';
 import { z } from 'zod';
 import { Throttle } from '@nestjs/throttler';
 import { AuthedRequest, Database, Public, RedisConnection, SuperAdmin, parse } from './core';
@@ -75,7 +75,7 @@ export class ClientMessagesController {
     const to = input.to ?? []; const cc = input.cc ?? []; const bcc = input.bcc ?? [];
     const recipientCount = to.length + cc.length + bcc.length;
     if (recipientCount > config.MAIL_MAX_RECIPIENTS) throw problem('TOO_MANY_RECIPIENTS', 'Recipient limit exceeded');
-    if (Buffer.byteLength(JSON.stringify(input), 'utf8') > config.MAIL_MAX_BODY_BYTES) throw problem('MESSAGE_TOO_LARGE', 'Message body limit exceeded', 413);
+    if (Buffer.byteLength(JSON.stringify({ ...input, attachments:undefined }), 'utf8') > config.MAIL_MAX_BODY_BYTES) throw problem('MESSAGE_TOO_LARGE', 'Message body limit exceeded', 413);
     const requestHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
     const keyId = request.apiPrincipal.id;
     const existing = await this.db.outgoingMessage.findUnique({ where: { apiKeyId_idempotencyKey: { apiKeyId: keyId, idempotencyKey } } });
@@ -90,7 +90,7 @@ export class ClientMessagesController {
     await rejectSuppressed(this.db, request.apiPrincipal.projectId, recipients);
     let created: { id: string; status: string; createdAt: Date; outboxEvents: { id: string }[] };
     try {
-      created = await this.db.outgoingMessage.create({ data: { projectId: request.apiPrincipal.projectId, apiKeyId: keyId, fromMailboxId: mailbox.id, subject: input.subject, textBody: input.text, htmlBody: input.html, replyToEmail: input.replyTo?.email, replyToName: input.replyTo?.name, idempotencyKey, requestHash, recipients: { create: recipients }, outboxEvents: { create: {} } }, select: { id: true, status: true, createdAt: true, outboxEvents: { select: { id: true } } } });
+      created = await this.db.outgoingMessage.create({ data: { projectId: request.apiPrincipal.projectId, apiKeyId: keyId, fromMailboxId: mailbox.id, subject: input.subject, textBody: input.text, htmlBody: input.html, attachments: { create: (input.attachments ?? []).map(file => { const content = Buffer.from(file.contentBase64, 'base64'); return { filename:file.filename, contentType:file.contentType, content, sizeBytes:content.length, disposition:file.disposition, contentId:file.contentId }; }) }, replyToEmail: input.replyTo?.email, replyToName: input.replyTo?.name, idempotencyKey, requestHash, recipients: { create: recipients }, outboxEvents: { create: {} } }, select: { id: true, status: true, createdAt: true, outboxEvents: { select: { id: true } } } });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         const raced = await this.db.outgoingMessage.findUnique({ where: { apiKeyId_idempotencyKey: { apiKeyId: keyId, idempotencyKey } } });
@@ -130,6 +130,8 @@ export class AdminComposeController {
     return this.submitPrepared(parse(sendMessageSchema, body), idempotencyKey, request);
   }
 
+  @Get('capabilities') capabilities() { return { attachments:true, limits:mailAttachmentLimits }; }
+
   @Get('respond/:sourceMessageId') async responseDraft(@Param('sourceMessageId') rawId: string, @Query('fromMailboxId') rawMailboxId: string, @Query('kind') rawKind: string, @Req() request: AuthedRequest) {
     const mailboxId = parse(idSchema, rawMailboxId);
     await new AccessPolicy(this.db).mailbox(request.user, mailboxId, 'mail.write');
@@ -165,7 +167,7 @@ export class AdminComposeController {
     if (!idempotencyKey || !/^[A-Za-z0-9._:-]{1,128}$/.test(idempotencyKey)) throw problem('IDEMPOTENCY_KEY_REQUIRED', 'A valid Idempotency-Key header is required');
     const to = input.to ?? []; const cc = input.cc ?? []; const bcc = input.bcc ?? [];
     if (to.length + cc.length + bcc.length > config.MAIL_MAX_RECIPIENTS) throw problem('TOO_MANY_RECIPIENTS', 'Recipient limit exceeded');
-    if (Buffer.byteLength(JSON.stringify(input), 'utf8') > config.MAIL_MAX_BODY_BYTES) throw problem('MESSAGE_TOO_LARGE', 'Message body limit exceeded', 413);
+    if (Buffer.byteLength(JSON.stringify({ ...input, attachments:undefined }), 'utf8') > config.MAIL_MAX_BODY_BYTES) throw problem('MESSAGE_TOO_LARGE', 'Message body limit exceeded', 413);
     const mailbox = await this.db.mailbox.findUnique({ where: { id: input.fromMailboxId }, include: { mailServer: true, credential: { select: { id: true } } } });
     if (!mailbox) throw problem('SENDER_NOT_AUTHORIZED', 'Select a managed sender mailbox', 403);
     if (!mailbox.isActive || mailbox.status === 'DISABLED') throw problem('MAILBOX_DISABLED', 'Sender mailbox is disabled', 409);
@@ -184,7 +186,7 @@ export class AdminComposeController {
     await rejectSuppressed(this.db, mailbox.projectId, recipients);
     let created: { id: string; status: string; createdAt: Date; outboxEvents: { id: string }[] };
     try {
-      created = await this.db.outgoingMessage.create({ data: { projectId: mailbox.projectId, createdByUserId: request.user.id, fromMailboxId: mailbox.id, subject: input.subject, textBody: input.text, htmlBody: input.html, replyToEmail: input.replyTo?.email, replyToName: input.replyTo?.name, inReplyTo: headers?.inReplyTo, references: headers?.references ?? [], idempotencyKey, requestHash, recipients: { create: recipients }, outboxEvents: { create: {} } }, select: { id: true, status: true, createdAt: true, outboxEvents: { select: { id: true } } } });
+      created = await this.db.outgoingMessage.create({ data: { projectId: mailbox.projectId, createdByUserId: request.user.id, fromMailboxId: mailbox.id, subject: input.subject, textBody: input.text, htmlBody: input.html, attachments: { create: (input.attachments ?? []).map(file => { const content = Buffer.from(file.contentBase64, 'base64'); return { filename:file.filename, contentType:file.contentType, content, sizeBytes:content.length, disposition:file.disposition, contentId:file.contentId }; }) }, replyToEmail: input.replyTo?.email, replyToName: input.replyTo?.name, inReplyTo: headers?.inReplyTo, references: headers?.references ?? [], idempotencyKey, requestHash, recipients: { create: recipients }, outboxEvents: { create: {} } }, select: { id: true, status: true, createdAt: true, outboxEvents: { select: { id: true } } } });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
         const raced = await this.db.outgoingMessage.findUnique({ where: { createdByUserId_idempotencyKey: identity }, select: { id: true, requestHash: true, status: true, createdAt: true } });

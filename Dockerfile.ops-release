@@ -1,0 +1,15 @@
+# Reuse reviewed migration tooling for a backend-only release. Both image
+# arguments must be immutable local tags or digests from the release record.
+ARG API_RUNTIME_IMAGE
+ARG OPS_TOOL_IMAGE
+FROM ${API_RUNTIME_IMAGE} AS backend
+FROM ${OPS_TOOL_IMAGE} AS ops
+WORKDIR /app
+COPY --from=backend --chown=node:node /app/packages/database/generated ./packages/database/generated
+COPY --from=backend --chown=node:node /app/packages/shared/dist ./packages/shared/dist
+COPY --from=backend --chown=node:node /app/packages/mail/dist ./packages/mail/dist
+COPY --chown=node:node packages/database/prisma ./packages/database/prisma
+# The generated client and migration CLI must agree before touching a database.
+RUN node -e "const p=require('./packages/database/generated/client');const cli=require('prisma/package.json');if(p.Prisma.prismaVersion.client!==cli.version)throw Error('PRISMA_TOOL_VERSION_MISMATCH')"
+USER node
+CMD ["node", "scripts/production/check.mjs"]

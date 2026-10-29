@@ -10,7 +10,7 @@ x-app-env: &app-env
   env_file: .env.production
   environment:
     NODE_ENV: production
-    APP_VERSION: ${APP_VERSION:?Set immutable APP_VERSION}
+    APP_VERSION: ${BACKEND_VERSION:-${APP_VERSION:?Set immutable APP_VERSION}}
     DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL in .env.production}
     REDIS_URL: ${REDIS_URL:?Set REDIS_URL in .env.production}
     SEED_ADMIN_PASSWORD: ''
@@ -71,7 +71,7 @@ services:
     logging: *logging
 
   api:
-    image: uni-mail-hub-api:${APP_VERSION:?Set immutable APP_VERSION}
+    image: uni-mail-hub-api:${BACKEND_VERSION:-${APP_VERSION:?Set immutable APP_VERSION}}
     build:
       context: .
       dockerfile: Dockerfile.production
@@ -81,7 +81,7 @@ services:
     <<: *app-env
     environment:
       NODE_ENV: production
-      APP_VERSION: ${APP_VERSION:?Set immutable APP_VERSION}
+      APP_VERSION: ${BACKEND_VERSION:-${APP_VERSION:?Set immutable APP_VERSION}}
       API_BIND_HOST: 0.0.0.0
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
@@ -107,7 +107,7 @@ services:
     logging: *logging
 
   worker:
-    image: uni-mail-hub-worker:${APP_VERSION:?Set immutable APP_VERSION}
+    image: uni-mail-hub-worker:${BACKEND_VERSION:-${APP_VERSION:?Set immutable APP_VERSION}}
     build:
       context: .
       dockerfile: Dockerfile.production
@@ -168,7 +168,7 @@ services:
 
   ops:
     profiles: [ops]
-    image: uni-mail-hub-ops:${APP_VERSION:?Set immutable APP_VERSION}
+    image: uni-mail-hub-ops:${BACKEND_VERSION:-${APP_VERSION:?Set immutable APP_VERSION}}
     build:
       context: .
       dockerfile: Dockerfile.production
@@ -176,7 +176,7 @@ services:
     <<: *app-env
     environment:
       NODE_ENV: production
-      APP_VERSION: ${APP_VERSION:?Set immutable APP_VERSION}
+      APP_VERSION: ${BACKEND_VERSION:-${APP_VERSION:?Set immutable APP_VERSION}}
       DATABASE_URL: ${DATABASE_URL:?Set DATABASE_URL}
       REDIS_URL: ${REDIS_URL:?Set REDIS_URL}
     volumes:
